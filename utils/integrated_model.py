@@ -96,7 +96,7 @@ class RainRobustRTDETR(nn.Module):
         print(f"  - Total parameters: {total_params:,}")
         print(f"  - Trainable parameters: {trainable_params:,} ({100 * trainable_params / total_params:.1f}%)")
     
-    def forward(self, pixel_values=None, labels=None, **kwargs):
+    def forward(self, pixel_values, labels=None, **kwargs):
         """
         Forward pass through the integrated model.
         
@@ -109,8 +109,13 @@ class RainRobustRTDETR(nn.Module):
             RT-DETR outputs (with loss if labels provided)
         """
         # Step 1: De-rain the input images
-        # SPDNet expects input in range [0, 1] and returns output in same range
-        clean_images = self.derain_module(pixel_values)
+        # SPDNet expects input in range [0, 1] and returns (out3, out2, out1)
+        # We only use out3 (the final refined output)
+        derain_outputs = self.derain_module(pixel_values)
+        if isinstance(derain_outputs, tuple):
+            clean_images = derain_outputs[0]  # out3 is the first output
+        else:
+            clean_images = derain_outputs
         
         # Step 2: Run object detection on de-rained images
         outputs = self.detection_module(pixel_values=clean_images, labels=labels, **kwargs)
@@ -131,7 +136,12 @@ class RainRobustRTDETR(nn.Module):
             Dictionary with 'loss', 'detection_loss', 'derain_loss' (if clean_targets provided)
         """
         # De-rain the images
-        clean_pred = self.derain_module(pixel_values)
+        # SPDNet returns (out3, out2, out1), use out3 as the final output
+        derain_outputs = self.derain_module(pixel_values)
+        if isinstance(derain_outputs, tuple):
+            clean_pred = derain_outputs[0]  # out3 is the first output
+        else:
+            clean_pred = derain_outputs
         
         # Detection on de-rained images
         detection_outputs = self.detection_module(pixel_values=clean_pred, labels=labels)

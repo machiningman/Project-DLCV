@@ -27,10 +27,10 @@ from utils.training_utils import (
 from transformers import Trainer, TrainerCallback
 
 # Configuration
-COCO_DIR = "E:/Python/DLCV/Project/dataset/coco"
-COCO_RAIN_DIR = "E:/Python/DLCV/Project/dataset/coco_rain"
+COCO_DIR = "E:/Python/DLCV/dataset/coco"
+COCO_RAIN_DIR = "E:/Python/DLCV/dataset/coco_rain"
 OUTPUT_DIR = "./outputs_integrated"
-SPDNET_MODEL_PATH = "E:/Python/DLCV/Project/model_spa.pt"  # Pretrained SPDNet
+SPDNET_MODEL_PATH = "E:/Python/DLCV/Project DLCV/model_spa.pt"  # Pretrained SPDNet
 RTDETR_MODEL_NAME = "PekingU/rtdetr_r18vd"  # Pretrained RT-DETR
 NUM_LABELS = 80  # COCO classes
 
@@ -45,7 +45,7 @@ GRADIENT_ACCUMULATION_STEPS = 2  # Effective batch size = 8 * 2 = 16
 LEARNING_RATE = 1e-5
 SEED = 42
 FP16 = True  # Enable mixed precision
-DATALOADER_WORKERS = 8  # Reduced due to memory constraints
+DATALOADER_WORKERS = 0  # Set to 0 on Windows to avoid multiprocessing issues
 
 # SPDNet Configuration
 SPDNET_N_FEATS = 32
