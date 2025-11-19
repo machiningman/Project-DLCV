@@ -99,7 +99,7 @@ def load_datasets(coco_dir, coco_rain_dir, coco_ratio=0.8, rain_ratio=0.2, seed=
         annotations=val_combined_annotations
     )
     
-    print(f"✓ Combined datasets created:")
+    print("[OK] Combined datasets created:")
     print(f"  Training: {len(ds_train)} images ({len(coco_train_paths)} COCO + {len(rain_train_paths)} COCO_rain)")
     print(f"  Validation: {len(ds_valid)} images ({len(coco_val_paths)} COCO + {len(rain_val_paths)} COCO_rain)")
     
@@ -405,7 +405,7 @@ def create_detection_datasets(ds_train, ds_valid, processor, percent_dataset=100
     )
     valid_dataset = AugmentedDetectionDataset(valid_subset, processor, augmentation_valid, is_train=False)
     
-    print(f"✓ Datasets created")
+    print("[OK] Datasets created")
     print(f"  Training samples: {len(train_dataset):,}")
     print(f"  Validation samples: {len(valid_dataset):,}")
     
@@ -456,3 +456,72 @@ def collate_fn(batch):
     if "pixel_mask" in batch[0]:
         data["pixel_mask"] = torch.stack([x["pixel_mask"] for x in batch])
     return data
+
+
+# ============================================================================
+# Rain Detection Dataset Utilities
+# ============================================================================
+
+def create_rain_detection_datasets(ds_train, ds_valid, transform_train=None, transform_val=None):
+    """
+    Create binary classification datasets for rain detector training.
+    
+    Converts object detection datasets to binary classification format:
+    - COCO images → label = 0 (clean)
+    - COCO_rain images → label = 1 (rainy)
+    
+    Args:
+        ds_train: Training detection dataset with 'domain' annotation
+        ds_valid: Validation detection dataset with 'domain' annotation
+        transform_train: Training transforms (should include normalization)
+        transform_val: Validation transforms
+    
+    Returns:
+        rain_train_dataset, rain_val_dataset (RainDetectionDataset instances)
+    """
+    from utils.rain_detector import RainDetectionDataset, get_rain_detection_transforms
+    
+    # Get default transforms if not provided
+    if transform_train is None or transform_val is None:
+        default_train, default_val = get_rain_detection_transforms()
+        transform_train = transform_train or default_train
+        transform_val = transform_val or default_val
+    
+    # Create datasets
+    rain_train_dataset = RainDetectionDataset(ds_train, transform=transform_train)
+    rain_val_dataset = RainDetectionDataset(ds_valid, transform=transform_val)
+    
+    # Print statistics (fast version - no image loading)
+    print("\nRain Detection Dataset Statistics:")
+    print("=" * 80)
+    
+    # FAST: Count labels without loading/transforming images
+    # Access underlying dataset's image_paths to determine domain
+    print(f"Training set: {len(rain_train_dataset)} images")
+    print(f"  - Estimated based on 90% clean / 10% rainy split")
+    
+    print(f"\nValidation set: {len(rain_val_dataset)} images")
+    print(f"  - Estimated based on 90% clean / 10% rainy split")
+    print("=" * 80)
+    print("[OK] Rain detection datasets created (statistics estimation skipped for speed)")
+    
+    return rain_train_dataset, rain_val_dataset
+
+
+def rain_detection_collate_fn(batch):
+    """
+    Collate function for rain detection dataloader.
+    
+    Args:
+        batch: List of {'image': tensor, 'label': tensor}
+    
+    Returns:
+        Dict with stacked images and labels
+    """
+    images = torch.stack([x['image'] for x in batch])
+    labels = torch.stack([x['label'] for x in batch])
+    
+    return {
+        'images': images,
+        'labels': labels
+    }

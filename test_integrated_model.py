@@ -32,10 +32,10 @@ def test_model_loading():
             rtdetr_name=RTDETR_MODEL_NAME,
             device=DEVICE
         )
-        print("\n✓ Model loaded successfully")
+        print("\n[OK] Model loaded successfully")
         return model, processor
     except Exception as e:
-        print(f"\n✗ Failed to load model: {e}")
+        print(f"\n[ERR] Failed to load model: {e}")
         raise
 
 
@@ -60,13 +60,13 @@ def test_forward_pass(model, processor):
         with torch.no_grad():
             outputs = model(**inputs)
         
-        print(f"✓ Forward pass successful")
+        print(f"[OK] Forward pass successful")
         print(f"  - Logits shape: {outputs.logits.shape}")
         print(f"  - Pred boxes shape: {outputs.pred_boxes.shape}")
         
         return True
     except Exception as e:
-        print(f"✗ Forward pass failed: {e}")
+        print(f"[ERR] Forward pass failed: {e}")
         return False
 
 
@@ -94,7 +94,7 @@ def test_gradient_flow(model, processor):
         model.train()
         outputs = model(pixel_values=inputs['pixel_values'], labels=labels)
         
-        print(f"✓ Forward pass with labels successful")
+        print(f"[OK] Forward pass with labels successful")
         print(f"  - Loss: {outputs.loss.item():.4f}")
         
         # Backward pass
@@ -111,14 +111,14 @@ def test_gradient_flow(model, processor):
                 if 'detection_module' in name:
                     rtdetr_has_grad = True
         
-        print(f"✓ Backward pass successful")
-        print(f"  - SPDNet gradients: {'✓ Present' if spdnet_has_grad else '✗ Missing'}")
-        print(f"  - RT-DETR gradients: {'✓ Present' if rtdetr_has_grad else '✗ Missing'}")
+        print(f"[OK] Backward pass successful")
+        print(f"  - SPDNet gradients: {'[OK] Present' if spdnet_has_grad else '[ERR] Missing'}")
+        print(f"  - RT-DETR gradients: {'[OK] Present' if rtdetr_has_grad else '[ERR] Missing'}")
         
         model.eval()
         return True
     except Exception as e:
-        print(f"✗ Gradient flow test failed: {e}")
+        print(f"[ERR] Gradient flow test failed: {e}")
         return False
 
 
@@ -136,21 +136,21 @@ def test_freeze_unfreeze(model):
         model.freeze_derain()
         trainable_after_freeze = sum(p.numel() for p in model.parameters() if p.requires_grad)
         
-        print(f"✓ Freeze de-raining successful")
+        print(f"[OK] Freeze de-raining successful")
         print(f"  - Trainable params: {trainable_before:,} → {trainable_after_freeze:,}")
         
         # Unfreeze de-raining module
         model.unfreeze_derain()
         trainable_after_unfreeze = sum(p.numel() for p in model.parameters() if p.requires_grad)
         
-        print(f"✓ Unfreeze de-raining successful")
+        print(f"[OK] Unfreeze de-raining successful")
         print(f"  - Trainable params: {trainable_after_freeze:,} → {trainable_after_unfreeze:,}")
         
         assert trainable_before == trainable_after_unfreeze, "Param count mismatch after unfreeze"
         
         return True
     except Exception as e:
-        print(f"✗ Freeze/unfreeze test failed: {e}")
+        print(f"[ERR] Freeze/unfreeze test failed: {e}")
         return False
 
 
@@ -171,7 +171,6 @@ def test_save_load(model, processor):
             # Save model
             model.save_pretrained(save_path)
             processor.save_pretrained(os.path.join(save_path, "processor"))
-            print(f"✓ Model saved to {save_path}")
             
             # Load model
             from utils.integrated_model import RainRobustRTDETR
@@ -183,18 +182,16 @@ def test_save_load(model, processor):
                 spdnet_model=spdnet,
                 device=DEVICE
             )
-            print(f"✓ Model loaded successfully")
             
             # Verify parameters match
             orig_params = sum(p.numel() for p in model.parameters())
             loaded_params = sum(p.numel() for p in loaded_model.parameters())
             
             assert orig_params == loaded_params, f"Parameter count mismatch: {orig_params} vs {loaded_params}"
-            print(f"✓ Parameter count matches: {orig_params:,}")
             
         return True
     except Exception as e:
-        print(f"✗ Save/load test failed: {e}")
+        print(f"[ERR] Save/load test failed: {e}")
         return False
 
 
@@ -215,7 +212,7 @@ def main():
         results['loading'] = True
     except Exception:
         results['loading'] = False
-        print("\n✗ Cannot proceed with other tests (model failed to load)")
+        print("\n[ERR] Cannot proceed with other tests (model failed to load)")
         return results
     
     # Test 2: Forward pass
@@ -235,15 +232,15 @@ def main():
     print("TEST SUMMARY")
     print("=" * 80)
     for test_name, passed in results.items():
-        status = "✓ PASSED" if passed else "✗ FAILED"
+        status = "[OK] PASSED" if passed else "[ERR] FAILED"
         print(f"{test_name:20s}: {status}")
     
     all_passed = all(results.values())
     print("\n" + "=" * 80)
     if all_passed:
-        print("✓ ALL TESTS PASSED - Integrated model is ready for training!")
+        print("[OK] ALL TESTS PASSED - Integrated model is ready for training!")
     else:
-        print("✗ SOME TESTS FAILED - Please fix issues before training")
+        print("[ERR] SOME TESTS FAILED - Please fix issues before training")
     print("=" * 80)
     
     return results

@@ -35,7 +35,7 @@ RTDETR_MODEL_NAME = "PekingU/rtdetr_r18vd"  # Pretrained RT-DETR
 NUM_LABELS = 80  # COCO classes
 
 # Training configuration
-PERCENT_DATASET = 100  # Use 100% of dataset
+PERCENT_DATASET = 80  # Use 100% of dataset
 COCO_RATIO = 0.9  # 90% clean images
 RAIN_RATIO = 0.1  # 10% rainy images
 NUM_EPOCHS = 12
@@ -53,8 +53,8 @@ SPDNET_N_RESBLOCKS = 3
 
 # Training phase configuration
 PHASE1_EPOCHS = 2   # Train detection head only (SPDNet frozen)
-PHASE2_EPOCHS = 8   # Train SPDNet + detection head (RT-DETR backbone frozen)
-PHASE3_EPOCHS = 12  # Fine-tune everything end-to-end
+PHASE2_EPOCHS = 3   # Train SPDNet + detection head (RT-DETR backbone frozen)
+PHASE3_EPOCHS = 5  # Fine-tune everything end-to-end
 
 # Callback configuration
 EARLY_STOPPING_PATIENCE = 4  # Stop if no improvement for N epochs
@@ -92,9 +92,9 @@ class IntegratedModelCallback(TrainerCallback):
                 if 'backbone' in name or 'encoder' in name:
                     param.requires_grad = False
                     frozen_count += 1
-            print(f"✓ SPDNet: FROZEN")
-            print(f"✓ RT-DETR backbone/encoder: FROZEN ({frozen_count} layers)")
-            print(f"✓ RT-DETR decoder: TRAINABLE")
+            print(f"[OK] SPDNet: FROZEN")
+            print(f"[OK] RT-DETR backbone/encoder: FROZEN ({frozen_count} layers)")
+            print(f"[OK] RT-DETR decoder: TRAINABLE")
             self._print_stats(model)
         
         # Transition to Phase 2
@@ -112,7 +112,7 @@ class IntegratedModelCallback(TrainerCallback):
                 if 'backbone' in name or 'encoder' in name:
                     param.requires_grad = False
                     frozen_count += 1
-            print(f"✓ RT-DETR backbone/encoder: FROZEN ({frozen_count} layers)")
+            print(f"[OK] RT-DETR backbone/encoder: FROZEN ({frozen_count} layers)")
             self._print_stats(model)
             self.current_phase = 1
         
@@ -129,8 +129,8 @@ class IntegratedModelCallback(TrainerCallback):
             # Unfreeze everything
             for param in model.parameters():
                 param.requires_grad = True
-            print(f"✓ SPDNet: TRAINABLE")
-            print(f"✓ RT-DETR (all layers): TRAINABLE")
+            print(f"[OK] SPDNet: TRAINABLE")
+            print(f"[OK] RT-DETR (all layers): TRAINABLE")
             self._print_stats(model)
             self.current_phase = 2
         
@@ -270,13 +270,13 @@ def main():
         best_save_path = f"{OUTPUT_DIR}/best_integrated"
         model.save_pretrained(best_save_path)
         processor.save_pretrained(os.path.join(best_save_path, "processor"))
-        print(f"✓ Best integrated model saved to {best_save_path}")
+    print(f"[OK] Best integrated model saved to {best_save_path}")
     
     # Also save final model
     final_save_path = f"{OUTPUT_DIR}/final_integrated"
     model.save_pretrained(final_save_path)
     processor.save_pretrained(os.path.join(final_save_path, "processor"))
-    print(f"✓ Final integrated model saved to {final_save_path}")
+    print(f"[OK] Final integrated model saved to {final_save_path}")
     
     # Plot training curves
     print("\n" + "=" * 80)
@@ -300,7 +300,7 @@ def main():
     torch.cuda.empty_cache()
     
     print("\n" + "=" * 80)
-    print("✓ Training completed successfully!")
+    print("[OK] Training completed successfully!")
     print("=" * 80)
     print(f"\nModel outputs:")
     print(f"  - Best model: {OUTPUT_DIR}/best_integrated/")
@@ -399,7 +399,7 @@ def plot_training_curves(trainer, args):
     plt.tight_layout()
     plt.savefig(f'{OUTPUT_DIR}/training_curves.png', dpi=300, bbox_inches='tight')
     plt.show()
-    print(f"✓ Training curves saved to {OUTPUT_DIR}/training_curves.png")
+    print(f"[OK] Training curves saved to {OUTPUT_DIR}/training_curves.png")
 
 
 if __name__ == "__main__":

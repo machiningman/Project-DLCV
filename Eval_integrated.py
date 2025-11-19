@@ -86,9 +86,9 @@ def main():
             os.path.join(INTEGRATED_MODEL_PATH, "processor")
         )
         
-        print("✓ Integrated model loaded successfully")
+        print("[OK] Integrated model loaded successfully")
     else:
-        print(f"✗ Integrated model not found at: {INTEGRATED_MODEL_PATH}")
+        print(f"[ERR] Integrated model not found at: {INTEGRATED_MODEL_PATH}")
         print("Loading pretrained models separately for comparison...")
         
         integrated_model, processor = load_integrated_model(
@@ -111,7 +111,7 @@ def main():
     vanilla_model, vanilla_processor = load_model_and_processor("PekingU/rtdetr_r18vd")
     vanilla_model = vanilla_model.to(DEVICE)
     vanilla_model.eval()
-    print("✓ Vanilla RT-DETR loaded")
+    print("[OK] Vanilla RT-DETR loaded")
     
     # Load COCO dataset
     print("\n" + "=" * 80)
@@ -248,7 +248,7 @@ def main():
     )
     
     print("\n" + "=" * 80)
-    print("✓ Evaluation completed successfully!")
+    print("[OK] Evaluation completed successfully!")
     print("=" * 80)
     print(f"\nOutputs:")
     print(f"  - PR curve comparison: ./pr_curve_comparison_integrated.png")
@@ -269,9 +269,9 @@ def main():
     print(f"Improvement:               {improvement:+.3f} ({improvement_pct:+.1f}%)")
     
     if improvement > 0:
-        print(f"\n✓ Integrated model OUTPERFORMS vanilla RT-DETR on rainy data!")
+        print(f"\n[OK] Integrated model OUTPERFORMS vanilla RT-DETR on rainy data!")
     else:
-        print(f"\n⚠ Integrated model needs more training or tuning")
+        print(f"\n[WARN] Integrated model needs more training or tuning")
     
     # Clean up
     torch.cuda.empty_cache()

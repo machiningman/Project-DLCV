@@ -53,13 +53,13 @@ class RainRobustRTDETR(nn.Module):
         """Freeze all parameters in a module"""
         for param in module.parameters():
             param.requires_grad = False
-        print(f"✓ {name} module frozen")
+        print(f"[OK] {name} module frozen")
     
     def _unfreeze_module(self, module, name):
         """Unfreeze all parameters in a module"""
         for param in module.parameters():
             param.requires_grad = True
-        print(f"✓ {name} module unfrozen")
+        print(f"[OK] {name} module unfrozen")
     
     def freeze_derain(self):
         """Freeze de-raining module"""
@@ -204,7 +204,7 @@ class RainRobustRTDETR(nn.Module):
         }
         torch.save(config, os.path.join(save_directory, "config.pt"))
         
-        print(f"✓ Integrated model saved to {save_directory}")
+        print(f"[OK] Integrated model saved to {save_directory}")
     
     @classmethod
     def from_pretrained(cls, load_directory, spdnet_model, device='cuda'):
@@ -244,7 +244,7 @@ class RainRobustRTDETR(nn.Module):
             freeze_detection=config.get('detection_frozen', False)
         )
         
-        print(f"✓ Integrated model loaded from {load_directory}")
+        print(f"[OK] Integrated model loaded from {load_directory}")
         return model
 
 
@@ -302,7 +302,7 @@ def load_integrated_model(spdnet_path, rtdetr_name="PekingU/rtdetr_r18vd",
     )
     
     print("\n" + "=" * 80)
-    print("✓ Integrated model ready for training/inference")
+    print("[OK] Integrated model ready for training/inference")
     print("=" * 80)
     
     return integrated_model, processor
