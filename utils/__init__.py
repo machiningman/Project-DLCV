@@ -1,7 +1,7 @@
 # utils package initializer
 # Expose common utilities for top-level imports (optional)
 from .data_utils import *
-from .eval_utils import *
+# from .eval_utils import *  # Commented out to prevent matplotlib import in worker processes
 from .model_utils import *
 from .training_utils import *
 from .spdnet_utils import *

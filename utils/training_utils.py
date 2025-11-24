@@ -20,44 +20,18 @@ class ObjectDetectionTrainer(Trainer):
     """Custom Trainer for object detection that properly handles predictions and sampling"""
 
     def get_train_dataloader(self):
-        """Use a domain-balanced sampler when possible (target ~20% rainy per batch)."""
-        if self.train_dataset is None:
-            return None
-
-        try:
-            from torch.utils.data import DataLoader, WeightedRandomSampler
-
-            dataset = self.train_dataset
-            # Try to get underlying image paths to detect rainy samples
-            paths = None
-            if hasattr(dataset, "get_path"):
-                paths = [dataset.get_path(i) for i in range(len(dataset))]
-            elif hasattr(dataset, "dataset") and hasattr(dataset.dataset, "image_paths"):
-                paths = list(getattr(dataset.dataset, "image_paths"))
-
-            if paths:
-                weights = []
-                for p in paths:
-                    p_str = str(p).lower()
-                    is_rain = ("coco_rain" in p_str) or ("rain" in p_str)
-                    # Target around 20% rainy samples
-                    weights.append(0.2 if is_rain else 0.8)
-
-                sampler = WeightedRandomSampler(weights=weights, num_samples=len(weights), replacement=True)
-                return DataLoader(
-                    dataset,
-                    batch_size=self.args.train_batch_size,
-                    sampler=sampler,
-                    collate_fn=self.data_collator,
-                    num_workers=self.args.dataloader_num_workers,
-                    pin_memory=self.args.dataloader_pin_memory,
-                    drop_last=True,
-                )
-        except Exception:
-            pass
-
-        # Fallback to default behavior
+        """
+        Overridden to use default RandomSampler.
+        The dataset is already balanced by load_datasets() in the main script.
+        We should NOT force a specific ratio here as it overrides the user's configuration.
+        """
         return super().get_train_dataloader()
+
+        # Previous implementation with hardcoded 20% sampling (Disabled)
+        # if self.train_dataset is None:
+        #     return None
+        # ... (rest of the code commented out or removed)
+
 
     def evaluation_loop(self, dataloader, description, prediction_loss_only=None, ignore_keys=None, metric_key_prefix="eval"):
         model = self.model

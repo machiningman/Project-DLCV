@@ -4,6 +4,8 @@ import os
 import json
 import torch
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # Force non-interactive backend for worker processes
 import matplotlib.pyplot as plt
 from PIL import Image
 from tqdm import tqdm

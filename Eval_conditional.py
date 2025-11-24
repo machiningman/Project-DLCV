@@ -301,7 +301,7 @@ def main():
     print("\n" + "=" * 80)
     print("Step 3: Loading vanilla RT-DETR for comparison...")
     print("=" * 80)
-    vanilla_model, _ = load_model_and_processor(VANILLA_RTDETR_NAME, device=device)
+    vanilla_model, _ = load_model_and_processor(VANILLA_RTDETR_NAME)
     
     # Evaluate rain detection accuracy
     print("\n" + "=" * 80)

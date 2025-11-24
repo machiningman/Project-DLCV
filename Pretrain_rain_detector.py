@@ -25,8 +25,9 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 import numpy as np
 
-from utils.data_utils import load_datasets, create_rain_detection_datasets, rain_detection_collate_fn
-from utils.rain_detector import RainDetector
+# DO NOT import utils modules at top level!
+# This causes Windows multiprocessing errors
+# Import inside main() function instead
 
 # Configuration
 COCO_DIR = "E:/Python/DLCV/dataset/coco"
@@ -38,17 +39,18 @@ CHECKPOINT_PATH = f"{OUTPUT_DIR}/rain_detector_best.pt"
 COCO_RATIO = 0.9  # 90% clean images
 RAIN_RATIO = 0.1  # 10% rainy images
 NUM_EPOCHS = 5    # Rain detection is easy, doesn't need many epochs
-BATCH_SIZE = 256  # Balanced for single-threaded data loading (was 512 with workers)
-LEARNING_RATE = 1e-3
+BATCH_SIZE = 256  # Optimized for single-process data loading (small model trains fast anyway)
+LEARNING_RATE = 3e-4
 WEIGHT_DECAY = 1e-4
 SEED = 42
 USE_AMP = True    # Use automatic mixed precision for faster training
 
 # DataLoader workers
-# Windows multiprocessing has persistent import issues with local packages
-# Setting to 0 uses single-process data loading (slower but more reliable)
-# GPU utilization will be lower but training still works
-# Workaround: Use larger batch sizes to compensate
+# Windows multiprocessing cannot pickle custom Dataset classes from utils package
+# The RainDetectionDataset class references utils.rain_detector module
+# Workers fail when trying to unpickle the dataset objects
+# For this simple pretraining (small model, fast training), single-process is acceptable
+# The main RT-DETR training uses HuggingFace Trainer which handles this better
 NUM_WORKERS = 0
 
 # Early stopping
@@ -230,8 +232,33 @@ def plot_training_curves(train_losses, train_accs, val_losses, val_accs, save_pa
     print(f"[OK] Training curves saved to {save_path}")
 
 
+def rain_detection_collate_fn(batch):
+    """
+    Collate function for rain detection dataloader.
+    Must be defined at module level (not inside main) for multiprocessing to pickle it.
+    
+    Args:
+        batch: List of {'image': tensor, 'label': tensor}
+    
+    Returns:
+        Dict with stacked images and labels
+    """
+    images = torch.stack([x['image'] for x in batch])
+    labels = torch.stack([x['label'] for x in batch])
+    
+    return {
+        'images': images,
+        'labels': labels
+    }
+
+
 def main():
     """Main training function"""
+    # Import utils modules here to avoid Windows multiprocessing issues
+    # Worker processes don't need to import these, only the main process does
+    from utils.data_utils import load_datasets, create_rain_detection_datasets
+    from utils.rain_detector import RainDetector
+    
     print("=" * 80)
     print("Rain Detector Pretraining Script")
     print("Binary Classification: Clean vs Rainy Images")

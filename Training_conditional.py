@@ -11,21 +11,25 @@ Training Strategy:
     Phase 3 (Epochs 9-12): Fine-tune everything end-to-end
 """
 
+# CRITICAL: Suppress matplotlib warnings before any imports
+# (supervision library imports matplotlib internally)
+import warnings
+warnings.filterwarnings('ignore', message='Unable to import Axes3D')
+
 import os
+import sys
 import torch
 import numpy as np
-import matplotlib.pyplot as plt
 from functools import partial
+from transformers import Trainer, TrainerCallback
 
-# Import utility modules
+# Ensure local 'utils' package is found first, avoiding conflicts with other libraries
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Import utils modules at top level for Windows multiprocessing support
 from utils.data_utils import load_datasets, create_detection_datasets, collate_fn, split_by_domain, check_split_leakage
 from utils.conditional_model import load_conditional_model
-from utils.training_utils import (
-    compute_metrics, 
-    get_training_arguments,
-    get_early_stopping_callback
-)
-from transformers import Trainer, TrainerCallback
+from utils.training_utils import compute_metrics, get_training_arguments, get_early_stopping_callback
 
 # Configuration
 COCO_DIR = "E:/Python/DLCV/dataset/coco"
@@ -37,17 +41,17 @@ RTDETR_MODEL_NAME = "PekingU/rtdetr_r18vd"
 NUM_LABELS = 80  # COCO classes
 
 # Training configuration
-PERCENT_DATASET = 100  # Use 100% of dataset
-COCO_RATIO = 0.9  # 90% clean images
-RAIN_RATIO = 0.1  # 10% rainy images
-NUM_EPOCHS = 12
-BATCH_SIZE = 16  # Can use larger batch (rain detector is lightweight)
-EVAL_BATCH_SIZE = 16
-GRADIENT_ACCUMULATION_STEPS = 1
+PERCENT_DATASET = 1   # Use 5% of dataset (Speed optimization: ~5x faster)
+COCO_RATIO = 0.5       # 50% clean images (Balanced sampling)
+RAIN_RATIO = 0.5       # 50% rainy images (Focus on rainy domain adaptation)
+NUM_EPOCHS = 12        # Full training (2 phases: 3 epochs head-only, 9 epochs full)
+BATCH_SIZE = 8         # Increased from 4 (SPDNet frozen = more memory available)
+EVAL_BATCH_SIZE = 8
+GRADIENT_ACCUMULATION_STEPS = 2  # Effective batch size = 8x2 = 16
 LEARNING_RATE = 1e-5
 SEED = 42
-FP16 = True
-DATALOADER_WORKERS = 0  # Set to 0 on Windows
+FP16 = True            # Enabled! Safe now that SPDNet gradients are disabled
+DATALOADER_WORKERS = 4  # Increased for faster data loading
 
 # Rain detection threshold
 RAIN_THRESHOLD = 0.5  # Adjust based on rain detector performance
@@ -56,29 +60,28 @@ RAIN_THRESHOLD = 0.5  # Adjust based on rain detector performance
 SPDNET_N_FEATS = 32
 SPDNET_N_RESBLOCKS = 3
 
-# Training phase configuration
-PHASE1_EPOCHS = 3   # Train detection head only (SPDNet + rain detector frozen)
-PHASE2_EPOCHS = 8   # Unfreeze SPDNet (rain detector still frozen)
-PHASE3_EPOCHS = 12  # Fine-tune everything (optional: can unfreeze rain detector)
+# Training phase configuration (SPDNet remains FROZEN throughout)
+PHASE1_EPOCHS = 3   # Train detection head only (RT-DETR decoder adaptation)
+PHASE2_EPOCHS = 12  # Unfreeze RT-DETR backbone (Full fine-tuning, SPDNet still frozen)
 
 # Callback configuration
 EARLY_STOPPING_PATIENCE = 4
 
 # Set environment variable for CUDA
-os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+# os.environ['CUDA_LAUNCH_BLOCKING'] = '1'  # Removed for performance
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'  # Help with memory fragmentation
 
 
 class ConditionalModelCallback(TrainerCallback):
     """Callback to manage freezing/unfreezing of conditional model components"""
     
-    def __init__(self, phase1_epochs=3, phase2_epochs=8):
+    def __init__(self, phase1_epochs=3):
         """
         Args:
             phase1_epochs: Epochs for phase 1 (detection head only)
-            phase2_epochs: Epochs for phase 2 (+ SPDNet)
+        Note: SPDNet remains FROZEN throughout all phases for speed/memory.
         """
         self.phase1_epochs = phase1_epochs
-        self.phase2_epochs = phase2_epochs
         self.current_phase = 0
     
     def on_epoch_begin(self, args, state, control, model=None, **kwargs):
@@ -106,45 +109,23 @@ class ConditionalModelCallback(TrainerCallback):
         # Transition to Phase 2
         elif current_epoch == self.phase1_epochs and self.current_phase == 0:
             print("\n" + "=" * 80)
-            print(f"PHASE 2: Training SPDNet + Detection Head (Epoch {current_epoch + 1})")
-            print("  → Unfreezing SPDNet")
-            print("  → Keeping RT-DETR backbone frozen for stability")
+            print(f"PHASE 2: Fine-Tuning RT-DETR (Epoch {current_epoch + 1})")
+            print("  → Unfreezing RT-DETR backbone + decoder")
+            print("  → SPDNet remains FROZEN (pretrained, saves memory/time)")
+            print("  → Rain detector remains FROZEN (pretrained is stable)")
             print("=" * 80)
-            # Unfreeze SPDNet
-            model.unfreeze_derain()
-            # Keep RT-DETR backbone frozen
-            frozen_count = 0
-            for name, param in model.detection_module.named_parameters():
-                if 'backbone' in name or 'encoder' in name:
-                    param.requires_grad = False
-                    frozen_count += 1
-            print(f"[OK] RT-DETR backbone/encoder: FROZEN ({frozen_count} layers)")
-            self._print_stats(model)
-            self.current_phase = 1
-        
-        # Phase 2: Continue training SPDNet + detection head
-        elif current_epoch < self.phase2_epochs and self.current_phase == 1:
-            print(f"\nPHASE 2: Epoch {current_epoch + 1}/{self.phase2_epochs}")
-        
-        # Transition to Phase 3
-        elif current_epoch == self.phase2_epochs and self.current_phase == 1:
-            print("\n" + "=" * 80)
-            print(f"PHASE 3: End-to-End Fine-Tuning (Epoch {current_epoch + 1})")
-            print("  → Unfreezing RT-DETR backbone")
-            print("  → Rain detector remains frozen (pretrained is stable)")
-            print("=" * 80)
-            # Unfreeze RT-DETR
+            # Unfreeze RT-DETR (all layers)
             for param in model.detection_module.parameters():
                 param.requires_grad = True
-            print(f"[OK] SPDNet: TRAINABLE")
+            print(f"[OK] SPDNet: FROZEN (always)")
             print(f"[OK] RT-DETR (all layers): TRAINABLE")
             print(f"[OK] Rain detector: FROZEN (pretrained)")
             self._print_stats(model)
-            self.current_phase = 2
+            self.current_phase = 1
         
-        # Phase 3: Continue end-to-end training
-        elif self.current_phase == 2:
-            print(f"\nPHASE 3: Epoch {current_epoch + 1}/{args.num_train_epochs}")
+        # Phase 2: Continue full RT-DETR training
+        elif self.current_phase == 1:
+            print(f"\nPHASE 2: Epoch {current_epoch + 1}/{args.num_train_epochs}")
     
     def _print_stats(self, model):
         """Print parameter statistics"""
@@ -155,6 +136,7 @@ class ConditionalModelCallback(TrainerCallback):
 
 def main():
     """Main training function"""
+    
     print("=" * 80)
     print("Conditional Rain-Robust RT-DETR Training Script")
     print("Selective De-raining: Only process rainy images")
@@ -250,20 +232,23 @@ def main():
         warmup_steps=200
     )
     
+    # Disable safetensors for the Trainer to avoid shared memory errors
+    args.save_safetensors = False
+    
     # Create trainer with conditional model callback
     print("\n" + "=" * 80)
     print("Step 5: Creating trainer...")
     print("=" * 80)
     
-    print("\nTraining Strategy:")
+    print("\nTraining Strategy (Optimized - SPDNet Frozen):")
     print(f"  Phase 1 (Epochs 1-{PHASE1_EPOCHS}): Detection head only")
-    print(f"  Phase 2 (Epochs {PHASE1_EPOCHS + 1}-{PHASE2_EPOCHS}): SPDNet + detection head")
-    print(f"  Phase 3 (Epochs {PHASE2_EPOCHS + 1}-{NUM_EPOCHS}): End-to-end fine-tuning")
-    print(f"\nRain detection threshold: {RAIN_THRESHOLD:.2f}")
-    print(f"Expected speedup: ~3x on clean images, same on rainy images")
+    print(f"  Phase 2 (Epochs {PHASE1_EPOCHS + 1}-{NUM_EPOCHS}): Full RT-DETR fine-tuning")
+    print(f"\nSPDNet: FROZEN throughout (pretrained de-rainer, saves memory/time)")
+    print(f"Rain detection threshold: {RAIN_THRESHOLD:.2f}")
+    print(f"Expected speedup: ~3x on clean images, 2-3x faster training with FP16")
     
     callbacks = [
-        ConditionalModelCallback(phase1_epochs=PHASE1_EPOCHS, phase2_epochs=PHASE2_EPOCHS),
+        ConditionalModelCallback(phase1_epochs=PHASE1_EPOCHS),
         get_early_stopping_callback(patience=EARLY_STOPPING_PATIENCE)
     ]
     
@@ -299,9 +284,9 @@ def main():
     model.save_pretrained(final_save_path)
     print(f"[OK] Final conditional model saved to {final_save_path}")
     
-    # Plot training curves
+    # Save training metrics to CSV (matplotlib removed)
     print("\n" + "=" * 80)
-    print("Step 8: Plotting training curves...")
+    print("Step 8: Saving training metrics...")
     print("=" * 80)
     plot_training_curves(trainer, args)
     
@@ -326,14 +311,17 @@ def main():
     print(f"\nModel outputs:")
     print(f"  - Best model: {OUTPUT_DIR}/best_conditional/")
     print(f"  - Final model: {OUTPUT_DIR}/final_conditional/")
-    print(f"  - Training curves: {OUTPUT_DIR}/training_curves.png")
+    print(f"  - Training metrics (CSV): {OUTPUT_DIR}/training_metrics.csv")
+    print(f"  - Full training log (JSON): {OUTPUT_DIR}/training_log.json")
     print(f"  - TensorBoard logs: {OUTPUT_DIR}/runs/")
     print(f"\nNext step: Evaluate conditional model")
     print(f"  → python Eval_conditional.py")
 
 
 def plot_training_curves(trainer, args):
-    """Plot training and validation curves"""
+    """Save training metrics to CSV file (matplotlib removed to avoid worker warnings)"""
+    import json
+    
     # Initialize arrays
     num_epochs = int(getattr(args, 'num_train_epochs', 0))
     training_loss = np.full(num_epochs, np.nan)
@@ -373,56 +361,21 @@ def plot_training_curves(trainer, args):
                     except Exception:
                         continue
     
-    # Trim trailing NaNs
-    valid_epochs = ~np.isnan(val_map) | ~np.isnan(training_loss) | ~np.isnan(val_loss)
-    if valid_epochs.sum() > 0:
-        training_loss = training_loss[valid_epochs]
-        val_loss = val_loss[valid_epochs]
-        val_map = val_map[valid_epochs]
+    # Save metrics to CSV
+    metrics_file = f'{OUTPUT_DIR}/training_metrics.csv'
+    with open(metrics_file, 'w') as f:
+        f.write('epoch,training_loss,val_loss,val_map\n')
+        for i in range(len(training_loss)):
+            f.write(f'{i+1},{training_loss[i]:.6f},{val_loss[i]:.6f},{val_map[i]:.6f}\n')
     
-    print(f'Epochs found: {len(val_map)}')
+    print(f'[OK] Training metrics saved to {metrics_file}')
+    print(f'Epochs logged: {(~np.isnan(val_map)).sum()}')
     
-    # Plot
-    fig, axs = plt.subplots(1, 2, figsize=(14, 5))
-    
-    # Loss subplot
-    if len(training_loss) > 0:
-        axs[0].plot(training_loss, label='Training Loss', marker='o')
-    if len(val_loss) > 0:
-        axs[0].plot(val_loss, label='Validation Loss', marker='s')
-    
-    # Add phase markers
-    if PHASE1_EPOCHS > 0:
-        axs[0].axvline(x=PHASE1_EPOCHS - 0.5, color='red', linestyle='--', alpha=0.5, label='Phase 1→2')
-    if PHASE2_EPOCHS > 0:
-        axs[0].axvline(x=PHASE2_EPOCHS - 0.5, color='green', linestyle='--', alpha=0.5, label='Phase 2→3')
-    
-    axs[0].set_xlabel('Epoch')
-    axs[0].set_ylabel('Loss')
-    axs[0].legend()
-    axs[0].set_title('Training and Validation Loss over Epochs')
-    axs[0].grid(True, alpha=0.3)
-    
-    # mAP subplot
-    if len(val_map) > 0:
-        axs[1].plot(val_map, label='Validation mAP', color='purple', marker='D')
-    
-    # Add phase markers
-    if PHASE1_EPOCHS > 0:
-        axs[1].axvline(x=PHASE1_EPOCHS - 0.5, color='red', linestyle='--', alpha=0.5, label='Phase 1→2')
-    if PHASE2_EPOCHS > 0:
-        axs[1].axvline(x=PHASE2_EPOCHS - 0.5, color='green', linestyle='--', alpha=0.5, label='Phase 2→3')
-    
-    axs[1].set_xlabel('Epoch')
-    axs[1].set_ylabel('mAP')
-    axs[1].legend()
-    axs[1].set_title('Validation mAP over Epochs (Conditional Model)')
-    axs[1].grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.savefig(f'{OUTPUT_DIR}/training_curves.png', dpi=300, bbox_inches='tight')
-    plt.show()
-    print(f"[OK] Training curves saved to {OUTPUT_DIR}/training_curves.png")
+    # Also save full log history as JSON for reference
+    json_file = f'{OUTPUT_DIR}/training_log.json'
+    with open(json_file, 'w') as f:
+        json.dump(log_history, f, indent=2)
+    print(f'[OK] Full training log saved to {json_file}')
 
 
 if __name__ == "__main__":

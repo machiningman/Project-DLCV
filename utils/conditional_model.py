@@ -90,7 +90,7 @@ class ConditionalRainRobustRTDETR(nn.Module):
                 derained = derain_outputs
             
             # Replace rainy images with de-rained versions
-            clean_images[rainy_indices] = derained
+            clean_images[rainy_indices] = derained.to(clean_images.dtype)
         
         # Step 3: Object detection on processed images
         outputs = self.detection_module(
@@ -227,8 +227,9 @@ class ConditionalRainRobustRTDETR(nn.Module):
         )
         
         # Save detection module (HuggingFace format)
+        # Use safe_serialization=False to avoid shared tensor error
         detection_path = os.path.join(save_directory, "detection_module")
-        self.detection_module.save_pretrained(detection_path)
+        self.detection_module.save_pretrained(detection_path, safe_serialization=False)
         
         # Save config
         config = {
@@ -300,8 +301,7 @@ def load_conditional_model(
     print(f"\n3. Loading RT-DETR: {rtdetr_name}")
     detection_module, processor = load_model_and_processor(
         rtdetr_name,
-        num_labels=num_labels,
-        device=device
+        num_labels=num_labels
     )
     detection_params = sum(p.numel() for p in detection_module.parameters())
     print(f"   [OK] RT-DETR loaded ({detection_params:,} parameters)")

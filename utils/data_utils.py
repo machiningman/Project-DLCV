@@ -5,6 +5,7 @@ import numpy as np
 import albumentations as A
 import torch
 import cv2
+cv2.setNumThreads(0)  # Disable OpenCV threading to avoid conflicts in data loader workers
 from torch.utils.data import Dataset
 from transformers import RTDetrImageProcessor
 
