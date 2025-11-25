@@ -101,7 +101,7 @@ class RainRobustRTDETR(nn.Module):
         Forward pass through the integrated model.
         
         Args:
-            pixel_values: Input rainy images (B, C, H, W)
+            pixel_values: Input rainy images (B, C, H, W) in [0, 1] range
             labels: Ground truth labels for training (optional)
             **kwargs: Additional arguments for RT-DETR
         
@@ -109,15 +109,26 @@ class RainRobustRTDETR(nn.Module):
             RT-DETR outputs (with loss if labels provided)
         """
         # Step 1: De-rain the input images
-        # SPDNet expects input in range [0, 1] and returns (out3, out2, out1)
-        # We only use out3 (the final refined output)
-        derain_outputs = self.derain_module(pixel_values)
+        # RT-DETR provides images in [0, 1], but SPDNet expects [0, 255]
+        # SPDNet outputs are also in [0, 255] range
+        
+        # Scale to [0, 255] for SPDNet
+        spdnet_input = pixel_values * 255.0
+        
+        derain_outputs = self.derain_module(spdnet_input)
         if isinstance(derain_outputs, tuple):
             clean_images = derain_outputs[0]  # out3 is the first output
         else:
             clean_images = derain_outputs
         
+        # Scale back to [0, 1] for RT-DETR and clamp to valid range
+        clean_images = torch.clamp(clean_images / 255.0, 0, 1)
+        
         # Step 2: Run object detection on de-rained images
+        # Note: Even with frozen RT-DETR, we need gradients to flow through 
+        # clean_images back to SPDNet. The detection loss depends on clean_images,
+        # which depends on SPDNet output. So gradients will flow to SPDNet.
+        # RT-DETR params won't update (requires_grad=False), but the graph is needed.
         outputs = self.detection_module(pixel_values=clean_images, labels=labels, **kwargs)
         
         return outputs
@@ -136,12 +147,17 @@ class RainRobustRTDETR(nn.Module):
             Dictionary with 'loss', 'detection_loss', 'derain_loss' (if clean_targets provided)
         """
         # De-rain the images
-        # SPDNet returns (out3, out2, out1), use out3 as the final output
-        derain_outputs = self.derain_module(pixel_values)
+        # SPDNet expects [0, 255] range, but RT-DETR provides [0, 1]
+        spdnet_input = pixel_values * 255.0
+        
+        derain_outputs = self.derain_module(spdnet_input)
         if isinstance(derain_outputs, tuple):
             clean_pred = derain_outputs[0]  # out3 is the first output
         else:
             clean_pred = derain_outputs
+        
+        # Scale back to [0, 1] for RT-DETR
+        clean_pred = torch.clamp(clean_pred / 255.0, 0, 1)
         
         # Detection on de-rained images
         detection_outputs = self.detection_module(pixel_values=clean_pred, labels=labels)

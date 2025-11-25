@@ -12,11 +12,8 @@ Training task: Binary classification (0 = clean, 1 = rainy)
 import os
 import sys
 
-# CRITICAL: Add project root to Python path BEFORE any local imports
-# This fixes Windows multiprocessing module import errors
-script_dir = os.path.dirname(os.path.abspath(__file__))
-if script_dir not in sys.path:
-    sys.path.insert(0, script_dir)
+import warnings
+warnings.filterwarnings('ignore', message='Unable to import Axes3D')
 
 import torch
 import torch.nn as nn
@@ -25,9 +22,12 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 import numpy as np
 
-# DO NOT import utils modules at top level!
-# This causes Windows multiprocessing errors
-# Import inside main() function instead
+# Ensure local 'utils' package is found first, avoiding conflicts with other libraries
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Import utils modules at top level for Windows multiprocessing support
+from utils.data_utils import load_datasets, create_rain_detection_datasets
+from utils.rain_detector import RainDetector
 
 # Configuration
 COCO_DIR = "E:/Python/DLCV/dataset/coco"
@@ -36,8 +36,8 @@ OUTPUT_DIR = "./rain_detector_pretrained"
 CHECKPOINT_PATH = f"{OUTPUT_DIR}/rain_detector_best.pt"
 
 # Training configuration
-COCO_RATIO = 0.9  # 90% clean images
-RAIN_RATIO = 0.1  # 10% rainy images
+COCO_RATIO = 0.5  # 90% clean images
+RAIN_RATIO = 0.5  # 10% rainy images
 NUM_EPOCHS = 5    # Rain detection is easy, doesn't need many epochs
 BATCH_SIZE = 256  # Optimized for single-process data loading (small model trains fast anyway)
 LEARNING_RATE = 3e-4
@@ -51,7 +51,7 @@ USE_AMP = True    # Use automatic mixed precision for faster training
 # Workers fail when trying to unpickle the dataset objects
 # For this simple pretraining (small model, fast training), single-process is acceptable
 # The main RT-DETR training uses HuggingFace Trainer which handles this better
-NUM_WORKERS = 0
+NUM_WORKERS = 10
 
 # Early stopping
 EARLY_STOPPING_PATIENCE = 3
@@ -254,10 +254,6 @@ def rain_detection_collate_fn(batch):
 
 def main():
     """Main training function"""
-    # Import utils modules here to avoid Windows multiprocessing issues
-    # Worker processes don't need to import these, only the main process does
-    from utils.data_utils import load_datasets, create_rain_detection_datasets
-    from utils.rain_detector import RainDetector
     
     print("=" * 80)
     print("Rain Detector Pretraining Script")

@@ -12,6 +12,7 @@ Performance:
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class ConditionalRainRobustRTDETR(nn.Module):
@@ -46,10 +47,28 @@ class ConditionalRainRobustRTDETR(nn.Module):
         self.detection_module = detection_module
         self.rain_threshold = rain_threshold
         
+        # ImageNet normalization constants for RainDetector
+        self.register_buffer('mean', torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
+        self.register_buffer('std', torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
+        
         # Freeze rain detector by default (pretrained and stable)
         if freeze_rain_detector:
             self.freeze_rain_detector()
     
+    def _preprocess_for_rain_detector(self, images):
+        """
+        Preprocess images for rain detector (Resize + Normalize).
+        RT-DETR inputs are [0, 1], RainDetector expects ImageNet norm.
+        """
+        # Resize to 224x224 (what RainDetector was trained on)
+        # Use bilinear interpolation
+        resized = F.interpolate(images, size=(224, 224), mode='bilinear', align_corners=False)
+        
+        # Normalize with ImageNet stats
+        normalized = (resized - self.mean) / self.std
+        
+        return normalized
+
     def forward(self, pixel_values, labels=None, **kwargs):
         """
         Forward pass with conditional de-raining.
@@ -68,7 +87,12 @@ class ConditionalRainRobustRTDETR(nn.Module):
         # Step 1: Detect rain in each image
         # Use no_grad for rain detector (frozen, no need for gradients)
         with torch.no_grad():
-            rain_scores = self.rain_detector(pixel_values)  # (B,)
+            # Preprocess input for rain detector (Resize + Normalize)
+            rain_input = self._preprocess_for_rain_detector(pixel_values)
+            rain_logits = self.rain_detector(rain_input)  # (B,) - raw logits
+            # Apply sigmoid to convert logits to probabilities
+            # This is numerically stable and prevents NaN in FP16
+            rain_scores = torch.sigmoid(rain_logits)  # (B,) - probabilities in [0, 1]
         
         # Step 2: Conditional de-raining
         clean_images = pixel_values.clone()
@@ -81,16 +105,37 @@ class ConditionalRainRobustRTDETR(nn.Module):
             rainy_indices = rainy_mask.nonzero(as_tuple=True)[0]
             rainy_images = pixel_values[rainy_indices]
             
-            # De-rain using SPDNet
-            # SPDNet returns (out3, out2, out1), we use out3 (final output)
-            derain_outputs = self.derain_module(rainy_images)
-            if isinstance(derain_outputs, tuple):
-                derained = derain_outputs[0]  # out3
-            else:
-                derained = derain_outputs
+            # De-rain using SPDNet (wrapped in no_grad since it's frozen)
+            # RT-DETR provides [0, 1], SPDNet expects [0, 255]
+            with torch.no_grad():  # SPDNet is frozen, no gradients needed
+                spdnet_input = rainy_images * 255.0
+                
+                derain_outputs = self.derain_module(spdnet_input)
+                if isinstance(derain_outputs, tuple):
+                    derained = derain_outputs[0]  # out3
+                else:
+                    derained = derain_outputs
+                
+                # Scale back to [0, 1] for RT-DETR
+                derained = derained / 255.0
+                
+                # CRITICAL: Replace NaN/Inf with original image (safety fallback for FP16)
+                # This prevents NaN propagation into RT-DETR
+                nan_mask = torch.isnan(derained) | torch.isinf(derained)
+                if nan_mask.any():
+                    derained = torch.where(nan_mask, rainy_images, derained)
+                
+                # Clamp to valid range
+                derained = torch.clamp(derained, 0, 1)
             
             # Replace rainy images with de-rained versions
             clean_images[rainy_indices] = derained.to(clean_images.dtype)
+        
+        # CRITICAL: Verify no NaN/Inf in input before RT-DETR (FP16 safety check)
+        if torch.isnan(clean_images).any() or torch.isinf(clean_images).any():
+            # Fallback to original input if de-raining produced invalid values
+            print("WARNING: NaN/Inf detected in de-rained output, using original images")
+            clean_images = pixel_values.clone()
         
         # Step 3: Object detection on processed images
         outputs = self.detection_module(
@@ -303,6 +348,7 @@ def load_conditional_model(
         rtdetr_name,
         num_labels=num_labels
     )
+    detection_module = detection_module.to(device)
     detection_params = sum(p.numel() for p in detection_module.parameters())
     print(f"   [OK] RT-DETR loaded ({detection_params:,} parameters)")
     
@@ -315,6 +361,9 @@ def load_conditional_model(
         rain_threshold=rain_threshold,
         freeze_rain_detector=freeze_rain_detector
     )
+    
+    # Move entire model to device (ensures buffers like mean/std are on device)
+    conditional_model = conditional_model.to(device)
     
     # Freeze SPDNet if requested
     if freeze_derain:

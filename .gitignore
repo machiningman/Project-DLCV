@@ -1,0 +1,36 @@
+# Large prediction files
+vanilla_preds.json
+vanilla_predictions.json
+integrated_predictions.json
+conditional_preds.json
+
+# Training checkpoints (keep only best and final)
+outputs_conditional/checkpoint-*/
+outputs_integrated/checkpoint-*/
+outputs_spdnet_adaptation/checkpoint-*/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Temporary files
+.tmp_*.txt
+*.tmp
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -2,29 +2,497 @@
 
 ## Project Overview
 
-This project implements **rain-robust object detection** by combining de-raining models (SPDNet/DRSformer) with RT-DETR object detection. The goal is to improve detection accuracy in rainy conditions while optimizing inference speed through various integration strategies.
+This project implements **rain-robust object detection** by combining de-raining models (SPDNet) with RT-DETR object detection. The goal is to improve detection accuracy in rainy conditions while optimizing inference speed through three main approaches:
+
+1. **Conditional Model**: Lightweight rain detector + selective de-raining (fastest)
+2. **Integrated Model**: End-to-end SPDNet + RT-DETR pipeline (balanced)
+3. **Comparison Baseline**: Vanilla RT-DETR vs. de-raining methods
 
 ### Architecture Components
 
-1. **De-raining Models** (preprocessing)
-   - **SPDNet**: Spatial Pyramid Dilated Network (faster, ~120ms)
-   - **DRSformer**: Transformer-based (higher quality, ~200ms)
-   - Both located outside project: `E:\Python\DLCV\SPDNet` and `E:\Python\DLCV\DRSformer`
-   
-2. **Detection Model**
-   - **RT-DETR**: Real-time DETR from HuggingFace (`PekingU/rtdetr_r18vd`)
-   - COCO-pretrained, 80 object classes
+1. **Rain Detector** (Binary Classifier)
+   - **Model**: MobileNetV3-Small (lightweight, ~3-5ms inference)
+   - **Training**: Pretrained in `Pretrain_rain_detector.py`
+   - **Checkpoint**: `./rain_detector_pretrained/rain_detector_best.pt`
+   - **Purpose**: Conditionally apply de-raining only on detected rainy images
+   - **Performance**: 96.8% accuracy, 99.5% precision on validation set
 
-3. **Two-Stage Pipeline** (current bottleneck)
-   ```
-   Rainy Image → De-raining Model → Clean Image → RT-DETR → Detections
-   ```
+2. **De-raining Model**
+   - **SPDNet**: Spatial Pyramid Dilated Network (~120ms)
+   - **Location**: `E:\Python\DLCV\SPDNet` (external, not in this project)
+   - **Checkpoint**: `E:\Python\DLCV\Project DLCV\model_spa.pt`
+   - **Input**: [0, 255] pixel range (standard 8-bit images)
+   - **Output**: [0, 255] pixel range
+   - **CRITICAL DETAIL**: Requires proper scaling when used with RT-DETR (see integration notes)
+
+3. **Detection Model**
+   - **RT-DETR**: Real-time DETR from HuggingFace (`PekingU/rtdetr_r18vd`)
+   - **Input**: [0, 1] normalized images at 640×640
+   - **COCO-pretrained**, 80 object classes
 
 ### Dataset Structure
 
-- **Clean COCO**: `E:\Python\DLCV\Project\dataset\coco` (standard COCO format)
-- **Rainy COCO**: `E:\Python\DLCV\Project\dataset\coco_rain` (synthetic rain degradation)
-- **Default mixing ratio**: 90% clean, 10% rainy for training robustness
+- **Clean COCO**: `E:\Python\DLCV\dataset\coco` (standard COCO format)
+- **Rainy COCO**: `E:\Python\DLCV\dataset\coco_rain` (synthetic rain)
+- **Training ratio**: 90% clean, 10% rainy (configurable)
+- **Validation ratio**: 90% clean, 10% rainy (same as training)
+
+## Performance Targets
+
+### Rain Detector
+- ✅ Accuracy: ≥ 96%
+- ✅ Precision: ≥ 99% (minimize false positives)
+- ✅ Recall: ≥ 95% (catch most rainy images)
+
+### Conditional Model on Rainy COCO
+- 🎯 Target mAP: ≥ 0.31 (match or exceed vanilla RT-DETR)
+- 📊 Expected: ~10-15% improvement due to selective de-raining
+
+### Integrated Model on Rainy COCO
+- 🎯 Target mAP: ≥ 0.31 (match or exceed vanilla RT-DETR)
+- 📊 Expected: ~5-10% improvement (less than conditional due to all-image de-raining)
+
+### Baseline (Vanilla RT-DETR on Rainy COCO)
+- Current: mAP ≈ 0.306
+- AP @ IoU=0.50: ≈ 0.437
+- AP @ IoU=0.75: ≈ 0.327
+
+## Component Integration Patterns
+
+### Critical: Input/Output Range Handling
+
+Each component expects specific input ranges and produces specific output ranges:
+
+| Component | Input Range | Output Range | Notes |
+|-----------|-------------|--------------|-------|
+| RT-DETR processor | Any image format | [0, 1] normalized | Standard PIL/Pillow format accepted |
+| Rain Detector | 224×224 ImageNet normalized | Logits | Must preprocess: resize + normalize |
+| SPDNet | [0, 255] pixel values | [0, 255] pixel values | Requires scaling when chained |
+| RT-DETR model | [0, 1] normalized at 640×640 | Detection results | Expects proper normalization range |
+
+### Pattern 1: Conditional Model (Rain → De-rain → Detect)
+
+```python
+# Input: pixel_values [0, 1] at 640×640 from RT-DETR processor
+# Step 1: Preprocess for rain detector
+rain_input = self._preprocess_for_rain_detector(pixel_values)  # →224×224 ImageNet norm
+rain_logits = self.rain_detector(rain_input)  # Binary classification
+rain_mask = rain_logits > 0.5  # True if rainy
+
+# Step 2: Conditionally de-rain only rainy images
+clean_images = pixel_values.clone()
+if rain_mask.any():
+    # CRITICAL: Scale to [0, 255] for SPDNet
+    spdnet_input = pixel_values[rain_mask] * 255.0
+    derain_output = self.derain_module(spdnet_input)
+    # CRITICAL: Scale back to [0, 1] for RT-DETR
+    clean_images[rain_mask] = torch.clamp(derain_output / 255.0, 0, 1)
+
+# Step 3: Detect on potentially de-rained images
+outputs = self.detector(clean_images)
+```
+
+### Pattern 2: Integrated Model (Always De-rain)
+
+```python
+# Input: pixel_values [0, 1] at 640×640 from RT-DETR processor
+# CRITICAL: SPDNet scaling must be applied
+spdnet_input = pixel_values * 255.0  # Scale to [0, 255]
+derain_output = self.derain_module(spdnet_input)
+clean_images = torch.clamp(derain_output / 255.0, 0, 1)  # Scale back to [0, 1], clamp safety
+
+# Detect on de-rained images
+outputs = self.detector(clean_images)
+```
+
+### Pattern 3: Two-Stage Pipeline (For Comparison)
+
+```python
+# External de-raining followed by detection
+from utils.drsformer_utils import load_drsformer_model
+
+derain_model = load_drsformer_model(path)
+spdnet_input = pixel_values * 255.0
+derain_output = derain_model(spdnet_input)
+clean_images = torch.clamp(derain_output / 255.0, 0, 1)
+
+# Then pass through detector
+outputs = detector(clean_images)
+```
+
+## Common Pitfalls & Troubleshooting
+
+### Issue: Rain Detector Accuracy Poor
+
+**Symptom**: Rain detection accuracy ~50%, treating all images same
+
+**Root Cause**: 
+1. Path-based labeling using substring match (`if 'rain' in path`) instead of exact folder (`if 'coco_rain' in path`)
+2. Input preprocessing mismatch (receiving [0,1] but expecting ImageNet-normalized)
+3. RGB/BGR color channel mismatch from OpenCV/Supervision
+
+**Fix**:
+```python
+# ✅ CORRECT: Check specific folder
+if 'coco_rain' in path.lower():  # Domain label
+    
+# ❌ WRONG: Substring match conflicts with 'train'
+if 'rain' in path.lower():  # Matches 'train2017' too!
+```
+
+**Prevention**: 
+- Always preprocess rain detector input via `_preprocess_for_rain_detector()`
+- Use `get_rain_detection_transforms()` for ImageNet normalization
+- Verify channel order with supervision: `supervision.detections_from_detections()`
+
+### Issue: SPDNet Integration Breaks Detection (-80% mAP)
+
+**Symptom**: Integrated model mAP drops from 0.306 → 0.064, detection count wrong
+
+**Root Cause**: SPDNet output range mismatch
+- SPDNet outputs [-4.6, 233.3] when receiving [0, 233]
+- RT-DETR expects [-1, 1] range for internal math
+- Values outside this break normalization layers
+
+**Fix** (CRITICAL):
+```python
+# BEFORE: ❌ Just clipping loses information
+clean_images = torch.clamp(spdnet_output, 0, 1)
+
+# AFTER: ✅ Proper scaling preserves distribution
+spdnet_input = pixel_values * 255.0  # Scale UP for SPDNet
+derain_output = self.derain_module(spdnet_input)
+clean_images = torch.clamp(derain_output / 255.0, 0, 1)  # Scale DOWN for RT-DETR
+```
+
+**Prevention**: 
+- Always check `torch.min()` and `torch.max()` of SPDNet output
+- Use debug script: `test_scaling_fix.py` (in root directory)
+- Verify output range before RT-DETR input: should be [0, 1]
+
+### Issue: OOM (Out of Memory) During Training
+
+**Symptom**: CUDA out of memory error, typically with batch_size=16
+
+**Root Cause**: Two models in GPU memory simultaneously
+
+**Fix**:
+```python
+# In Training_conditional.py configuration
+BATCH_SIZE = 8  # Reduce from 16
+GRADIENT_ACCUMULATION_STEPS = 2  # Effective batch size = 8×2 = 16
+```
+
+### Issue: Rain Detector Always Predicts Positive
+
+**Symptom**: 100% rainy predictions on all images despite high accuracy in training
+
+**Root Cause**: 
+- Model trained on imbalanced data (all positive)
+- Threshold problem (default logit threshold 0.5 wrong)
+- Preprocessing not applied during inference
+
+**Fix**:
+```python
+# Apply preprocessing before inference
+rain_input = _preprocess_for_rain_detector(pixel_values)
+rain_logits = self.rain_detector(rain_input)
+rain_prob = torch.sigmoid(rain_logits)  # Convert logits to probability
+is_rainy = rain_prob > 0.5  # Use 0.5 probability threshold, not logit
+```
+
+### Issue: Dataset Evaluation Slow (20+ minutes)
+
+**Symptom**: Evaluation running for >20 minutes on rainy COCO
+
+**Fix**: Use dataset fraction for testing
+```python
+# In evaluation script
+DATASET_FRACTION = 0.05  # Use 5% (250 images) for testing
+# Change to 1.0 for full evaluation when ready
+```
+
+Expected times:
+- 5% (250 images): 2-3 minutes
+- 50% (2500 images): 10-15 minutes  
+- 100% (5000 images): 20-30 minutes
+
+## Component Input/Output Reference
+
+### Rain Detector
+
+**Input**: 224×224 ImageNet-normalized tensor
+```python
+# Example preprocessing
+from utils.rain_detector import get_rain_detection_transforms
+transforms = get_rain_detection_transforms()
+rain_input = transforms(image)  # Returns [3, 224, 224] normalized
+```
+
+**Output**: Binary logits (before sigmoid)
+```python
+logits = rain_detector(rain_input)  # Shape: [batch_size, 2] or [batch_size]
+probability = torch.sigmoid(logits)  # Probability of rain
+is_rainy = probability > 0.5
+```
+
+### SPDNet
+
+**Input**: [0, 255] pixel values (not normalized)
+```python
+# Proper input creation
+spdnet_input = pixel_values * 255.0  # Scale from [0,1] to [0,255]
+```
+
+**Output**: [0, 255] de-rained pixel values
+```python
+derain_output = spdnet_model(spdnet_input)
+# Output range is typically [-4, 240+] - MUST be scaled back
+clean_images = torch.clamp(derain_output / 255.0, 0, 1)
+```
+
+### RT-DETR
+
+**Input**: [0, 1] normalized 640×640 image
+```python
+# Via processor
+processor = AutoImageProcessor.from_pretrained("PekingU/rtdetr_r18vd")
+processed = processor(image)  # Returns [0, 1] normalized pixel_values
+```
+
+**Output**: Detection results with boxes, scores, labels
+```python
+outputs = model(**processed)
+# outputs.boxes: [N, 4] in format [x1, y1, x2, y2]
+# outputs.scores: [N] confidence scores
+# outputs.labels: [N] class indices
+```
+
+- **`rain_detector.py`**: Binary rain classification model
+  - `RainDetector`: MobileNetV3-based architecture
+  - `RainDetectionDataset`: Converts detection dataset to binary classification
+  - `get_rain_detection_transforms()`: ImageNet normalization + augmentation
+  - **CRITICAL**: Uses 224×224 ImageNet normalization, requires preprocessing from 640×640
+
+- **`data_utils.py`**: Dataset loading and augmentation
+  - `load_datasets()`: Combines COCO + COCO_rain with configurable ratios
+  - `create_rain_detection_datasets()`: Converts to binary classification format
+  - `AugmentedDetectionDataset`: Domain-aware augmentations
+  - `split_by_domain()`: Separates clean vs. rainy images
+  
+- **`model_utils.py`**: RT-DETR loading
+  - `load_model_and_processor()`: Loads RT-DETR from HuggingFace
+  
+- **`spdnet_utils.py`**: SPDNet integration
+  - `load_spdnet_model()`: Loads pretrained model from `model_spa.pt`
+  - `derain_image()`: Applies de-raining to PIL images
+  - **CRITICAL**: Expects [0, 255] input, outputs [0, 255]
+
+- **`conditional_model.py`**: ⭐ **Conditional Model** - Rain detector + selective de-raining
+  - `ConditionalRainRobustRTDETR`: Main class combining three components
+  - `forward()`: Detects rain → conditionally de-rains → detects objects
+  - `_preprocess_for_rain_detector()`: Resizes 640×640 to 224×224 + ImageNet norm
+  - **KEY FIX**: Rain detector receives properly preprocessed inputs
+  - Rain detection accuracy: 96.8%
+
+- **`integrated_model.py`**: ⭐ **Integrated Model** - End-to-end SPDNet + RT-DETR
+  - `RainRobustRTDETR`: Always applies de-raining on all images
+  - `forward()`: SPDNet(image) → RT-DETR(de-rained)
+  - **KEY FIX**: Scales input to [0, 255], scales output back to [0, 1]
+  - Single forward pass (eliminates two-stage bottleneck)
+
+- **`eval_utils.py`**: Evaluation and metrics
+  - `generate_predictions()`: Batch inference + COCO format
+  - `evaluate_coco()`: COCO mAP calculation
+  
+### Training Scripts
+
+- **`Pretrain_rain_detector.py`**: Train rain detector
+  - Binary classification on full dataset
+  - Output: `./rain_detector_pretrained/rain_detector_best.pt`
+  - Time: ~5-10 minutes
+  
+- **`Training_conditional.py`**: Train conditional model
+  - Phase 1: Train detection head + rain detector
+  - Phase 2: Fine-tune SPDNet
+  - Phase 3: End-to-end fine-tuning
+  - Output: `./outputs_conditional/best_conditional/`
+  
+- **`Training.py`**: Train vanilla RT-DETR
+  - Baseline training without de-raining
+  - Output: `./outputs/best_from_training/`
+
+### Evaluation Scripts
+
+- **`Eval_integrated.py`**: Compare integrated model vs vanilla RT-DETR
+  - Evaluates on rainy COCO validation set
+  - `DATASET_FRACTION = 0.05` (5% = 250 images for fast testing)
+  - Set to `1.0` for full evaluation
+  
+- **`Eval_conditional.py`**: Compare conditional model vs vanilla RT-DETR
+  - Includes rain detection accuracy evaluation
+  - `DATASET_FRACTION = 0.05` for fast testing
+  - Shows when de-raining helps vs. hurts
+
+- **`Eval_rain_compare.py`**: Detailed comparison of all methods
+  - Vanilla RT-DETR baseline
+  - Conditional model (rain detection + SPDNet)
+  - Integrated model (always de-rain)
+  - Generates PR curves and visualizations
+
+## Critical Bug Fixes & Lessons Learned
+
+### 1. Rain Detector Data Labeling (FIXED)
+**Problem**: All images labeled as positive (rainy) due to checking `'rain' in path` which matched `'train2017'`
+**Solution**: Check specifically for `'coco_rain'` folder in path
+**Result**: Accuracy improved from 56% to 99.6%
+
+### 2. Rain Detector Input Preprocessing (FIXED)
+**Problem**: Receiving 640×640 [0,1] normalized images, but trained on 224×224 ImageNet-normalized inputs
+**Solution**: Added `_preprocess_for_rain_detector()` to resize + normalize before rain detector
+**Result**: Rain detection now works correctly with conditional model
+
+### 3. SPDNet Input/Output Scaling (FIXED - CRITICAL)
+**Problem**: SPDNet expects [0, 255] but receiving [0, 1]; outputs [0, 255] but RT-DETR expects [0, 1]
+- Without fix: Performance dropped 80% (mAP 0.3 → 0.064)
+- Root cause: Out-of-range values (-2.7 to 1.9) broke RT-DETR's internal math
+
+**Solution**: Scale inputs `× 255`, scale outputs `÷ 255` then clamp
+```python
+spdnet_input = pixel_values * 255.0
+derain_output = self.derain_module(spdnet_input)
+clean_images = torch.clamp(derain_output / 255.0, 0, 1)
+```
+
+**Result**: Proper de-raining integration (currently testing performance improvement)
+
+### Key Lessons
+1. ✅ Use specific folder names for path-based labels, not substrings
+2. ✅ Match input/output ranges to model's training assumptions
+3. ✅ Scale instead of clip when converting between ranges
+4. ✅ Use `register_buffer()` for normalization constants (automatically moved to device)
+
+See `docs/RAIN_DETECTOR_AND_INTEGRATION_FIXES.md` for detailed analysis.
+
+## Terminal & Development Setup
+
+### IMPORTANT: Virtual Environment Activation
+
+**ALWAYS activate the virtual environment before running any Python scripts:**
+
+```powershell
+# Activate virtual environment
+& E:\Python\DLCV\.venv\Scripts\Activate.ps1
+
+# Verify activation (should show (.venv) prefix)
+python --version
+```
+
+**When using terminal through any tool**, ensure you run:
+```powershell
+& E:\Python\DLCV\.venv\Scripts\Activate.ps1
+```
+
+**DO NOT** use bare `python` or `pip` commands - they will use the system Python instead of the project's virtual environment.
+
+### Common Development Commands
+
+```powershell
+# Activate venv
+& E:\Python\DLCV\.venv\Scripts\Activate.ps1
+
+# Train rain detector (required first)
+python Pretrain_rain_detector.py
+
+# Train conditional model
+python Training_conditional.py
+
+# Quick evaluation (5% dataset)
+python Eval_conditional.py
+
+# Full evaluation (100% dataset)
+# Edit: DATASET_FRACTION = 1.0 in script first
+python Eval_integrated.py
+
+# Test specific component
+python -c "from utils.rain_detector import RainDetector; print('OK')"
+```
+
+## Development Workflows
+
+### Pre-requisite: Train Rain Detector
+
+```powershell
+& E:\Python\DLCV\.venv\Scripts\Activate.ps1
+python Pretrain_rain_detector.py
+```
+
+**Output**: `./rain_detector_pretrained/rain_detector_best.pt`
+**Time**: ~5-10 minutes
+**Validation accuracy**: Should be ≥ 99%
+
+### Workflow 1: Quick Testing (5% Dataset)
+
+```powershell
+& E:\Python\DLCV\.venv\Scripts\Activate.ps1
+
+# Test conditional model
+python Eval_conditional.py
+
+# Test integrated model  
+python Eval_integrated.py
+```
+
+**Time**: ~2-3 minutes each
+**Purpose**: Verify no crashes, check logging, inspect early results
+
+### Workflow 2: Full Evaluation (100% Dataset)
+
+```powershell
+& E:\Python\DLCV\.venv\Scripts\Activate.ps1
+
+# Edit script to set DATASET_FRACTION = 1.0
+# Then run:
+python Eval_integrated.py
+```
+
+**Time**: ~20-30 minutes
+**Purpose**: Compute official COCO metrics
+
+### Workflow 3: Training Conditional Model
+
+```powershell
+& E:\Python\DLCV\.venv\Scripts\Activate.ps1
+
+# Edit configuration at top of script
+# Set epochs, batch size, learning rate
+python Training_conditional.py
+```
+
+**Output**: 
+- `./outputs_conditional/best_conditional/` (best model)
+- `./outputs_conditional/final_conditional/` (final model)
+- Training curves + metrics
+
+## Performance Targets
+
+### Rain Detector
+- ✅ Accuracy: ≥ 96%
+- ✅ Precision: ≥ 99% (minimize false positives)
+- ✅ Recall: ≥ 95% (catch most rainy images)
+
+### Conditional Model on Rainy COCO
+- 🎯 Target mAP: ≥ 0.31 (match or exceed vanilla RT-DETR)
+- 📊 Expected: ~10-15% improvement due to selective de-raining
+
+### Integrated Model on Rainy COCO
+- 🎯 Target mAP: ≥ 0.31 (match or exceed vanilla RT-DETR)
+- 📊 Expected: ~5-10% improvement (less than conditional due to all-image de-raining)
+
+### Baseline (Vanilla RT-DETR on Rainy COCO)
+- Current: mAP ≈ 0.306
+- AP @ IoU=0.50: ≈ 0.437
+- AP @ IoU=0.75: ≈ 0.327
 
 ## Code Organization
 

@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # Import utils modules at top level for Windows multiprocessing support
 from utils.data_utils import load_datasets, create_detection_datasets, collate_fn, split_by_domain, check_split_leakage
 from utils.conditional_model import load_conditional_model
-from utils.training_utils import compute_metrics, get_training_arguments, get_early_stopping_callback
+from utils.training_utils import compute_metrics, get_training_arguments, get_early_stopping_callback, ObjectDetectionTrainer
 
 # Configuration
 COCO_DIR = "E:/Python/DLCV/dataset/coco"
@@ -41,7 +41,7 @@ RTDETR_MODEL_NAME = "PekingU/rtdetr_r18vd"
 NUM_LABELS = 80  # COCO classes
 
 # Training configuration
-PERCENT_DATASET = 1   # Use 5% of dataset (Speed optimization: ~5x faster)
+PERCENT_DATASET = 20   # Use 20% of dataset (Speed optimization: ~5x faster)
 COCO_RATIO = 0.5       # 50% clean images (Balanced sampling)
 RAIN_RATIO = 0.5       # 50% rainy images (Focus on rainy domain adaptation)
 NUM_EPOCHS = 12        # Full training (2 phases: 3 epochs head-only, 9 epochs full)
@@ -65,7 +65,7 @@ PHASE1_EPOCHS = 3   # Train detection head only (RT-DETR decoder adaptation)
 PHASE2_EPOCHS = 12  # Unfreeze RT-DETR backbone (Full fine-tuning, SPDNet still frozen)
 
 # Callback configuration
-EARLY_STOPPING_PATIENCE = 4
+EARLY_STOPPING_PATIENCE = 10  # Increased to prevent early stopping during debugging
 
 # Set environment variable for CUDA
 # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'  # Removed for performance
@@ -252,7 +252,7 @@ def main():
         get_early_stopping_callback(patience=EARLY_STOPPING_PATIENCE)
     ]
     
-    trainer = Trainer(
+    trainer = ObjectDetectionTrainer(
         model=model,
         args=args,
         train_dataset=train_dataset,

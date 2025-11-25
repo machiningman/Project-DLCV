@@ -1,0 +1,11 @@
+Epoch 5 Summary:
+  Train Loss: 0.0113 | Train Acc: 99.63%
+  Val Loss: 0.0131 | Val Acc: 99.62%
+  Precision: 99.52% | Recall: 99.72%
+  F1 Score: 99.62%
+
+  Confusion Matrix:
+    TP: 2493 | FP: 12
+    FN: 7 | TN: 2488
+
+  [OK] Best model saved! (Val Loss: 0.0131, Val Acc: 99.62%)

@@ -18,11 +18,18 @@ import numpy as np
 from tqdm import tqdm
 from PIL import Image
 import matplotlib.pyplot as plt
+from pycocotools.coco import COCO
 
 from utils.data_utils import load_datasets, split_by_domain
 from utils.conditional_model import load_conditional_model
 from utils.model_utils import load_model_and_processor
-from utils.eval_utils import generate_predictions, evaluate_coco, run_inference, visualize_predictions
+from utils.eval_utils import (
+    COCO_CLASS_NAMES,
+    build_label_mapping,
+    generate_predictions, 
+    evaluate_coco, 
+    run_inference
+)
 
 # Configuration
 COCO_RAIN_DIR = "E:/Python/DLCV/dataset/coco_rain"  # Evaluate on rainy data
@@ -30,9 +37,11 @@ CONDITIONAL_MODEL_PATH = "./outputs_conditional/best_conditional"
 RAIN_DETECTOR_PATH = "./rain_detector_pretrained/rain_detector_best.pt"
 SPDNET_MODEL_PATH = "E:/Python/DLCV/Project DLCV/model_spa.pt"
 VANILLA_RTDETR_NAME = "PekingU/rtdetr_r18vd"  # For comparison
+USE_TRAINED_MODEL = True  # If True, load trained conditional model; else use pretrained components
 
 # Evaluation configuration
 NUM_SAMPLES = 500  # Number of samples to evaluate (for timing)
+DATASET_FRACTION = 1  # Use 100% of dataset for testing
 CONFIDENCE_THRESHOLD = 0.3  # For visualization
 INFERENCE_THRESHOLD = 0.01  # For COCO evaluation
 RAIN_THRESHOLD = 0.5
@@ -95,11 +104,10 @@ def evaluate_timing(conditional_model, vanilla_model, processor, ds_valid, devic
     sample_images = []
     sample_domains = []
     
-    for i, (img_path, annotations) in enumerate(ds_valid):
-        if i >= num_samples:
-            break
+    for i in range(min(num_samples, len(ds_valid))):
+        img_path, image, annotations = ds_valid[i]
         
-        image = Image.open(img_path).convert('RGB')
+        image = Image.fromarray(image).convert('RGB')
         
         # Process image
         inputs = processor(images=image, return_tensors="pt")
@@ -107,9 +115,9 @@ def evaluate_timing(conditional_model, vanilla_model, processor, ds_valid, devic
         
         sample_images.append(pixel_values)
         
-        # Determine domain
-        domain = annotations.get('domain', 'unknown')
-        sample_domains.append('rainy' if 'rain' in domain.lower() else 'clean')
+        # Determine domain from image path
+        is_rainy = 'coco_rain' in str(img_path).lower() or 'rain' in str(img_path).lower()
+        sample_domains.append('rainy' if is_rainy else 'clean')
     
     # Batch images
     batch = torch.cat(sample_images[:min(8, len(sample_images))], dim=0)  # Batch of 8
@@ -187,19 +195,25 @@ def evaluate_rain_detection(conditional_model, ds_valid, device, processor):
     conditional_model.eval()
     
     with torch.no_grad():
-        for img_path, annotations in tqdm(ds_valid, desc="Evaluating rain detection"):
-            image = Image.open(img_path).convert('RGB')
+        for i in tqdm(range(len(ds_valid)), desc="Evaluating rain detection"):
+            img_path, image, annotations = ds_valid[i]
+            image = Image.fromarray(image).convert('RGB')
             
-            # Get ground truth domain
-            domain = annotations.get('domain', 'unknown')
-            is_rainy_gt = 'rain' in domain.lower()
+            # Get ground truth domain from image path
+            is_rainy_gt = 'coco_rain' in str(img_path).lower() or 'rain' in str(img_path).lower()
             
             # Process image
             inputs = processor(images=image, return_tensors="pt")
             pixel_values = inputs['pixel_values'].to(device)
             
             # Get rain detection score
-            rain_score = conditional_model.rain_detector(pixel_values).item()
+            # Use the internal preprocessing method if available, otherwise raw
+            if hasattr(conditional_model, '_preprocess_for_rain_detector'):
+                rain_input = conditional_model._preprocess_for_rain_detector(pixel_values)
+                rain_score = conditional_model.rain_detector(rain_input).item()
+            else:
+                rain_score = conditional_model.rain_detector(pixel_values).item()
+                
             is_rainy_pred = rain_score > conditional_model.rain_threshold
             
             # Store scores
@@ -282,17 +296,32 @@ def main():
     print("Step 2: Loading conditional model...")
     print("=" * 80)
     
-    # Check if model exists
-    if not os.path.exists(f"{CONDITIONAL_MODEL_PATH}/rain_detector.pt"):
-        print(f"ERROR: Conditional model not found at {CONDITIONAL_MODEL_PATH}")
-        print("Please train the conditional model first:")
-        print("  → python Training_conditional.py")
-        return
-    
+    if USE_TRAINED_MODEL:
+        print(f"Mode: Using TRAINED conditional model from {CONDITIONAL_MODEL_PATH}")
+        # Check if model exists
+        if not os.path.exists(f"{CONDITIONAL_MODEL_PATH}/rain_detector.pt"):
+            print(f"ERROR: Conditional model not found at {CONDITIONAL_MODEL_PATH}")
+            print("Please train the conditional model first:")
+            print("  → python Training_conditional.py")
+            return
+            
+        # Use trained components
+        rd_path = f"{CONDITIONAL_MODEL_PATH}/rain_detector.pt"
+        spd_path = f"{CONDITIONAL_MODEL_PATH}/derain_module.pt"
+        det_path = f"{CONDITIONAL_MODEL_PATH}/detection_module"
+    else:
+        print(f"Mode: Using UNTRAINED conditional model (pretrained components only)")
+        print("Note: This evaluates the integration of pretrained models without fine-tuning.")
+        
+        # Use pretrained components
+        rd_path = RAIN_DETECTOR_PATH
+        spd_path = SPDNET_MODEL_PATH
+        det_path = VANILLA_RTDETR_NAME
+
     conditional_model, processor = load_conditional_model(
-        rain_detector_path=RAIN_DETECTOR_PATH,
-        spdnet_path=SPDNET_MODEL_PATH,
-        rtdetr_name=VANILLA_RTDETR_NAME,
+        rain_detector_path=rd_path,
+        spdnet_path=spd_path,
+        rtdetr_name=det_path,
         device=device,
         rain_threshold=RAIN_THRESHOLD
     )
@@ -302,6 +331,8 @@ def main():
     print("Step 3: Loading vanilla RT-DETR for comparison...")
     print("=" * 80)
     vanilla_model, _ = load_model_and_processor(VANILLA_RTDETR_NAME)
+    vanilla_model = vanilla_model.to(device)
+    vanilla_model.eval()
     
     # Evaluate rain detection accuracy
     print("\n" + "=" * 80)
@@ -309,33 +340,67 @@ def main():
     print("=" * 80)
     rain_metrics = evaluate_rain_detection(conditional_model, ds_valid_rainy, device, processor)
     
-    # Timing comparison
+    # # Timing comparison
+    # print("\n" + "=" * 80)
+    # print("Step 5: Timing comparison...")
+    # print("=" * 80)
+    # timing_stats = evaluate_timing(
+    #     conditional_model, vanilla_model, processor, 
+    #     ds_valid_rainy, device, num_samples=NUM_SAMPLES
+    # )
+    
+    # Load COCO annotations for evaluation
     print("\n" + "=" * 80)
-    print("Step 5: Timing comparison...")
+    print("Step 6: Loading COCO annotations for evaluation...")
     print("=" * 80)
-    timing_stats = evaluate_timing(
-        conditional_model, vanilla_model, processor, 
-        ds_valid_rainy, device, num_samples=NUM_SAMPLES
-    )
+    coco_gt = COCO(f"{COCO_RAIN_DIR}/annotations/instances_val2017.json")
+    all_image_ids = coco_gt.getImgIds()
+    
+    # Sample dataset if fraction < 1.0
+    if DATASET_FRACTION < 1.0:
+        import random
+        random.seed(42)
+        num_samples = int(len(all_image_ids) * DATASET_FRACTION)
+        image_ids = random.sample(all_image_ids, num_samples)
+        print(f"Using {len(image_ids)} images ({DATASET_FRACTION * 100:.0f}% of dataset)")
+    else:
+        image_ids = all_image_ids
+        print(f"Using all {len(image_ids)} images")
+    
+    label_to_coco_id = build_label_mapping(COCO_CLASS_NAMES, coco_gt)
     
     # COCO evaluation
     print("\n" + "=" * 80)
-    print("Step 6: COCO mAP evaluation...")
+    print("Step 7: COCO mAP evaluation...")
     print("=" * 80)
     
-    print("\n6a. Conditional model (with de-raining):")
+    print("\n7a. Conditional model (with de-raining):")
     conditional_preds = generate_predictions(
-        conditional_model, ds_valid_rainy, processor, 
-        device, threshold=INFERENCE_THRESHOLD
+        model=conditional_model,
+        processor=processor,
+        device=device,
+        coco_gt=coco_gt,
+        image_ids=image_ids,
+        val_images_dir=f"{COCO_RAIN_DIR}/val2017",
+        label_to_coco_id=label_to_coco_id,
+        class_names=COCO_CLASS_NAMES,
+        threshold=INFERENCE_THRESHOLD
     )
-    conditional_metrics = evaluate_coco(ds_valid_rainy, conditional_preds)
+    conditional_metrics = evaluate_coco(conditional_preds, coco_gt, "conditional_preds.json")
     
-    print("\n6b. Vanilla RT-DETR (no de-raining):")
+    print("\n7b. Vanilla RT-DETR (no de-raining):")
     vanilla_preds = generate_predictions(
-        vanilla_model, ds_valid_rainy, processor,
-        device, threshold=INFERENCE_THRESHOLD
+        model=vanilla_model,
+        processor=processor,
+        device=device,
+        coco_gt=coco_gt,
+        image_ids=image_ids,
+        val_images_dir=f"{COCO_RAIN_DIR}/val2017",
+        label_to_coco_id=label_to_coco_id,
+        class_names=COCO_CLASS_NAMES,
+        threshold=INFERENCE_THRESHOLD
     )
-    vanilla_metrics = evaluate_coco(ds_valid_rainy, vanilla_preds)
+    vanilla_metrics = evaluate_coco(vanilla_preds, coco_gt, "vanilla_preds.json")
     
     # Summary
     print("\n" + "=" * 80)
@@ -343,29 +408,21 @@ def main():
     print("=" * 80)
     
     print("\n1. Detection Performance (on rainy images):")
-    print(f"   Conditional model mAP: {conditional_metrics['map']:.4f}")
-    print(f"   Vanilla RT-DETR mAP:   {vanilla_metrics['map']:.4f}")
-    improvement = conditional_metrics['map'] - vanilla_metrics['map']
-    print(f"   Improvement: {improvement:+.4f} ({100*improvement/vanilla_metrics['map']:+.1f}%)")
+    print(f"   Conditional model mAP: {conditional_metrics.stats[0]:.4f}")
+    print(f"   Vanilla RT-DETR mAP:   {vanilla_metrics.stats[0]:.4f}")
+    improvement = conditional_metrics.stats[0] - vanilla_metrics.stats[0]
+    print(f"   Improvement: {improvement:+.4f} ({100*improvement/vanilla_metrics.stats[0]:+.1f}%)")
     
-    print("\n2. Speed Performance:")
-    print(f"   Conditional: {timing_stats['conditional_time']:.2f} ms")
-    print(f"   Vanilla:     {timing_stats['vanilla_time']:.2f} ms")
-    print(f"   Speedup:     {timing_stats['speedup']:.2f}x")
-    
-    print("\n3. Rain Detection:")
+    print("\n2. Rain Detection:")
     print(f"   Accuracy:  {100*rain_metrics['accuracy']:.2f}%")
     print(f"   Precision: {100*rain_metrics['precision']:.2f}%")
     print(f"   Recall:    {100*rain_metrics['recall']:.2f}%")
     
     # Save results
     results = {
-        'conditional_map': conditional_metrics['map'],
-        'vanilla_map': vanilla_metrics['map'],
-        'improvement': improvement,
-        'conditional_time_ms': timing_stats['conditional_time'],
-        'vanilla_time_ms': timing_stats['vanilla_time'],
-        'speedup': timing_stats['speedup'],
+        'conditional_map': float(conditional_metrics.stats[0]),
+        'vanilla_map': float(vanilla_metrics.stats[0]),
+        'improvement': float(improvement),
         'rain_detection_accuracy': rain_metrics['accuracy']
     }
     

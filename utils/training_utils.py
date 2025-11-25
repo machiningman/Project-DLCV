@@ -193,6 +193,20 @@ def compute_metrics(eval_pred, processor, threshold=0.5):
             output, threshold=threshold, target_sizes=image_sizes
         )
         
+        # DEBUG: Print first batch sample info
+        if len(post_processed_predictions) > 0:
+            print(f"\n[DEBUG] Eval Sample 0:")
+            print(f"  Preds: {len(post_processed_predictions[0]['boxes'])} boxes")
+            if len(post_processed_predictions[0]['boxes']) > 0:
+                print(f"  Top Box: {post_processed_predictions[0]['boxes'][0].tolist()}")
+                print(f"  Top Score: {post_processed_predictions[0]['scores'][0].item():.4f}")
+                print(f"  Top Label: {post_processed_predictions[0]['labels'][0].item()}")
+            
+            print(f"  Targets: {len(post_processed_targets[0]['boxes'])} boxes")
+            if len(post_processed_targets[0]['boxes']) > 0:
+                print(f"  First GT Box: {post_processed_targets[0]['boxes'][0].tolist()}")
+                print(f"  First GT Label: {post_processed_targets[0]['labels'][0].item()}")
+                
         # Move predictions to CPU
         for pred in post_processed_predictions:
             pred['boxes'] = pred['boxes'].cpu()

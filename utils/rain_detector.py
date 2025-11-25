@@ -182,7 +182,9 @@ class RainDetectionDataset(torch.utils.data.Dataset):
             dataset_paths = getattr(self.dataset, 'image_paths', None) or getattr(self.dataset, 'images', None)
             if dataset_paths is not None and idx < len(dataset_paths):
                 p = str(dataset_paths[idx]).lower()
-                domain = 'rainy' if ('coco_rain' in p or 'rain' in p) else 'clean'
+                # Fix: 'train' contains 'rain', so we must be more specific
+                # 'coco_rain' is the folder name for rainy images
+                domain = 'rainy' if 'coco_rain' in p else 'clean'
             else:
                 domain = 'clean'
 
@@ -192,17 +194,24 @@ class RainDetectionDataset(torch.utils.data.Dataset):
         if self.transform:
             from PIL import Image
             import os
+            import cv2
+            import numpy as np
             
             # Ensure image is PIL for torchvision transforms
             if isinstance(image, (str, os.PathLike)):
                 image = Image.open(str(image)).convert('RGB')
             elif not isinstance(image, Image.Image):
                 # Convert numpy array to PIL Image
-                import numpy as np
                 if isinstance(image, np.ndarray):
+                    # Assume BGR from OpenCV/Supervision if 3 channels
+                    if image.ndim == 3 and image.shape[2] == 3:
+                        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
                     image = Image.fromarray(image)
                 else:
-                    image = Image.fromarray(np.array(image))
+                    arr = np.array(image)
+                    if arr.ndim == 3 and arr.shape[2] == 3:
+                        arr = cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
+                    image = Image.fromarray(arr)
             
             image = self.transform(image)
         

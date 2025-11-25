@@ -8,12 +8,18 @@ def load_model_and_processor(model_name="PekingU/rtdetr_r18vd", num_labels=80):
     Load RT-DETR model and processor.
     
     Args:
-        model_name: HuggingFace model name or path (default: "PekingU/rtdetr_r18vd")
+        model_name: HuggingFace model name or local path (default: "PekingU/rtdetr_r18vd")
         num_labels: Number of object detection classes (default: 80 for COCO)
         
     Returns:
         Tuple of (model, processor)
     """
+    import os
+    
+    # Convert relative paths to absolute for reliable loading
+    if os.path.isdir(model_name) or model_name.startswith('./'):
+        model_name = os.path.abspath(model_name)
+    
     # Load processor
     processor = RTDetrImageProcessor.from_pretrained(model_name)
     
