@@ -48,7 +48,7 @@ CHECKPOINT_PATH = "./outputs_feature_derain/feature_derain_best.pt"
 
 # Model
 MODEL_NAME = "PekingU/rtdetr_r18vd"
-DERAIN_TYPE = "lightweight"
+DERAIN_TYPE = "multiscale"  # Must match training: "multiscale" or "lightweight"
 
 # Evaluation
 PERCENT_DATASET = 10  # Evaluate on 10% of val set
@@ -200,9 +200,9 @@ def main():
         
         vanilla_preds.append({
             'path': path,
-            'boxes': results_batch['boxes'].cpu().numpy(),
-            'scores': results_batch['scores'].cpu().numpy(),
-            'labels': results_batch['labels'].cpu().numpy()
+            'boxes': results_batch['boxes'].detach().cpu().numpy(),
+            'scores': results_batch['scores'].detach().cpu().numpy(),
+            'labels': results_batch['labels'].detach().cpu().numpy()
         })
     
     results['vanilla'] = {
@@ -245,9 +245,9 @@ def main():
             
             feature_preds.append({
                 'path': path,
-                'boxes': results_batch['boxes'].cpu().numpy(),
-                'scores': results_batch['scores'].cpu().numpy(),
-                'labels': results_batch['labels'].cpu().numpy()
+                'boxes': results_batch['boxes'].detach().cpu().numpy(),
+                'scores': results_batch['scores'].detach().cpu().numpy(),
+                'labels': results_batch['labels'].detach().cpu().numpy()
             })
         
         results['feature_derain'] = {
@@ -291,6 +291,8 @@ def main():
         """Compute COCO-style mAP metrics"""
         # Create COCO format annotations
         coco_gt = {
+            'info': {'description': 'Evaluation'},
+            'licenses': [],
             'images': [],
             'annotations': [],
             'categories': [{'id': i, 'name': f'class_{i}'} for i in range(80)]
@@ -309,7 +311,7 @@ def main():
             
             # Ground truth
             for box, label in zip(gt['boxes'], gt['labels']):
-                x1, y1, x2, y2 = box
+                x1, y1, x2, y2 = [float(v) for v in box]
                 coco_gt['annotations'].append({
                     'id': ann_id,
                     'image_id': img_id,
@@ -322,7 +324,7 @@ def main():
             
             # Predictions
             for box, score, label in zip(pred['boxes'], pred['scores'], pred['labels']):
-                x1, y1, x2, y2 = box
+                x1, y1, x2, y2 = [float(v) for v in box]
                 coco_dt.append({
                     'image_id': img_id,
                     'category_id': int(label),

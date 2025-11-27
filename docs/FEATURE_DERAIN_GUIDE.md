@@ -122,7 +122,7 @@ Processing at all scales ensures comprehensive de-raining.
 for param in model.rtdetr.parameters():
     param.requires_grad = False
 
-optimizer = AdamW(model.derain_module.parameters(), lr=1e-4)
+optimizer = AdamW(model.derain_module.parameters(), lr=5e-4)  # Higher LR for de-rain module
 ```
 
 **Loss**: Detection loss (IoU + classification) from frozen detector
@@ -159,18 +159,37 @@ The training process is handled by `Training_FeatureDerain.py`.
 ### Usage
 
 ```powershell
-# Activate environment
+# Activate environment FIRST (required!)
 & E:\Python\DLCV\.venv\Scripts\Activate.ps1
 
 # Run training
 python Training_FeatureDerain.py
 ```
 
-### Configuration (in script)
-*   `DERAIN_TYPE`: "lightweight" (default) or "multiscale"
-*   `PERCENT_DATASET`: Percentage of dataset to use (default 10% for speed)
-*   `PHASE1_EPOCHS`: Epochs for de-rain module only (default 5)
-*   `PHASE2_EPOCHS`: Epochs for joint fine-tuning (default 10)
+### Recommended Configuration
+
+| Setting | Value | Notes |
+|---------|-------|-------|
+| `DERAIN_TYPE` | `"multiscale"` | ~300K params, better learning |
+| `BATCH_SIZE` | `16` | For 16GB GPU |
+| `GRADIENT_ACCUMULATION_STEPS` | `1` | No accumulation with large batch |
+| `EVAL_BATCH_SIZE` | `24` | Faster evaluation |
+| `NUM_WORKERS` | `4` | Parallel data loading |
+| `PHASE1_LR` | `5e-4` | Higher LR for de-rain module |
+| `PERCENT_DATASET` | `10` | ~12K images, faster iteration |
+
+### ⚠️ Important: Module Choice
+
+| Module | Params | GPU Memory | Learning Capacity |
+|--------|--------|------------|-------------------|
+| `lightweight` | 63 | ~4GB | ⚠️ Too small - loss doesn't decrease |
+| `multiscale` | ~300K | ~10-14GB | ✅ Recommended |
+
+**Use `multiscale`** - The lightweight module has only 63 parameters (just attention scalars), which is insufficient for meaningful learning. Training loss stayed flat with lightweight.
+
+### Expected GPU Usage
+- **16GB GPU**: `BATCH_SIZE=16` → ~12-14GB usage
+- **8GB GPU**: `BATCH_SIZE=6-8` → ~6-8GB usage
 
 ## Usage Example
 
@@ -229,17 +248,38 @@ Based on similar approaches in literature:
 
 | File | Purpose |
 |------|---------|
-| `utils/feature_derain.py` | Core implementation |
-| `Training_FeatureDerain.py` | Training script (TODO) |
-| `Eval_FeatureDerain.py` | Evaluation script (TODO) |
+| `utils/feature_derain.py` | Core implementation (modules + wrapper) |
+| `Training_FeatureDerain.py` | Training script ✅ |
+| `Eval_FeatureDerain.py` | Evaluation script |
+
+## Troubleshooting
+
+### Training Loss Not Decreasing
+- **Cause**: Using `lightweight` module (only 63 params)
+- **Fix**: Set `DERAIN_TYPE = "multiscale"`
+
+### Low GPU Utilization
+- **Cause**: Small batch size or no parallel data loading
+- **Fix**: Increase `BATCH_SIZE` and set `NUM_WORKERS = 4`
+
+### DataLoader Hangs on Windows
+- **Cause**: Multiprocessing issues on Windows
+- **Fix**: If still stuck, set `NUM_WORKERS = 0`
+
+### OOM (Out of Memory)
+- **Cause**: Batch size too large
+- **Fix**: Reduce `BATCH_SIZE` by 4, increase `GRADIENT_ACCUMULATION_STEPS`
+
+### Import Errors
+- **Cause**: Virtual environment not activated
+- **Fix**: Always run `& E:\Python\DLCV\.venv\Scripts\Activate.ps1` first
 
 ## Next Steps
 
-1. **Test building blocks**: Run `python utils/feature_derain.py`
-2. **Create training script**: Implement `Training_FeatureDerain.py`
-3. **Train on rainy COCO**: ~10 epochs with detection loss
-4. **Evaluate on MixedRain**: Compare with SPDNet approaches
-5. **Optimize for deployment**: TensorRT compilation if needed
+1. ✅ **Implemented training script**: `Training_FeatureDerain.py`
+2. **Train with multiscale**: ~5-10 epochs with detection loss
+3. **Evaluate on MixedRain**: Compare with SPDNet approaches
+4. **Optimize for deployment**: TensorRT compilation if needed
 
 ## References
 

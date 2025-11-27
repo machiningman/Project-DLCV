@@ -63,16 +63,16 @@ OUTPUT_DIR = "./outputs_feature_derain"
 
 # Model
 MODEL_NAME = "PekingU/rtdetr_r18vd"
-DERAIN_TYPE = "lightweight"  # "lightweight" or "multiscale"
+DERAIN_TYPE = "multiscale"  # "lightweight" or "multiscale" - multiscale has ~50K+ params
 
 # Dataset
-PERCENT_DATASET = 10   # Use 10% for faster training (~12K images)
+PERCENT_DATASET = 25   # Use 25% for faster training (~30K images)
 COCO_RATIO = 0.3       # 30% clean images (prevent over-processing)
 RAIN_RATIO = 0.7       # 70% rainy images
 
 # Training - Phase 1 (De-rain module only)
 PHASE1_EPOCHS = 5
-PHASE1_LR = 1e-4
+PHASE1_LR = 5e-4  # Increased LR for better convergence
 
 # Training - Phase 2 (Joint fine-tuning)
 PHASE2_EPOCHS = 10
@@ -80,16 +80,18 @@ PHASE2_LR_DERAIN = 1e-4
 PHASE2_LR_DETECTOR = 1e-5  # 10x lower for pretrained parts
 
 # General training
-BATCH_SIZE = 4
-GRADIENT_ACCUMULATION_STEPS = 4  # Effective batch = 16
-EVAL_BATCH_SIZE = 8
-NUM_WORKERS = 4
+BATCH_SIZE = 16  # Increased further for 16GB GPU
+GRADIENT_ACCUMULATION_STEPS = 1  # No accumulation needed with larger batch
+EVAL_BATCH_SIZE = 24  # Larger eval batch
+NUM_WORKERS = 4  # Enable parallel data loading
 SEED = 42
 
-# Checkpointing
-SAVE_EVERY_N_EPOCHS = 2
+# Evaluation
 EVAL_EVERY_N_EPOCHS = 1
 LOG_EVERY_N_STEPS = 50
+
+# Early Stopping
+EARLY_STOPPING_PATIENCE = 3  # Stop if val loss doesn't improve for N epochs
 
 # Memory
 USE_AMP = True  # Feature derain is compatible with AMP (unlike SPDNet)
@@ -400,27 +402,22 @@ def main():
     # Load RT-DETR processor
     processor = RTDetrImageProcessor.from_pretrained(MODEL_NAME)
     
-    # Use a fast, direct COCO loading approach
-    from pycocotools.coco import COCO
-    import os
+    # Load combined COCO + COCO_rain datasets using data_utils
+    ds_train, ds_valid = load_datasets(
+        coco_dir=COCO_DIR,
+        coco_rain_dir=COCO_RAIN_DIR,
+        coco_ratio=COCO_RATIO,
+        rain_ratio=RAIN_RATIO,
+        seed=SEED
+    )
     
-    print("  Loading COCO_rain annotations...")
-    train_ann_file = os.path.join(COCO_RAIN_DIR, "annotations", "instances_train2017.json")
-    val_ann_file = os.path.join(COCO_RAIN_DIR, "annotations", "instances_val2017.json")
-    
-    coco_train = COCO(train_ann_file)
-    coco_val = COCO(val_ann_file)
-    
-    train_img_ids = coco_train.getImgIds()
-    val_img_ids = coco_val.getImgIds()
-    
-    print(f"  Total: {len(train_img_ids)} train, {len(val_img_ids)} val images")
+    print(f"  Total: {len(ds_train)} train, {len(ds_valid)} val images")
     
     # Subsample if needed
     if PERCENT_DATASET < 100:
         np.random.seed(SEED)
-        train_paths = list(ds_train.image_paths) if hasattr(ds_train, 'image_paths') else list(ds_train.images)
-        valid_paths = list(ds_valid.image_paths) if hasattr(ds_valid, 'image_paths') else list(ds_valid.images)
+        train_paths = list(ds_train.image_paths)
+        valid_paths = list(ds_valid.image_paths)
         
         n_train = max(1, int(len(train_paths) * PERCENT_DATASET / 100))
         n_valid = max(1, int(len(valid_paths) * PERCENT_DATASET / 100))
@@ -428,26 +425,31 @@ def main():
         train_indices = np.random.choice(len(train_paths), n_train, replace=False)
         valid_indices = np.random.choice(len(valid_paths), n_valid, replace=False)
         
-        # Create subsampled datasets
+        # Create subsampled image paths and annotations
         train_paths_subset = [train_paths[i] for i in train_indices]
         valid_paths_subset = [valid_paths[i] for i in valid_indices]
         
+        # Create subsampled datasets
+        import supervision as sv
+        ds_train = sv.DetectionDataset(
+            classes=ds_train.classes,
+            images=train_paths_subset,
+            annotations={p: ds_train.annotations[p] for p in train_paths_subset}
+        )
+        ds_valid = sv.DetectionDataset(
+            classes=ds_valid.classes,
+            images=valid_paths_subset,
+            annotations={p: ds_valid.annotations[p] for p in valid_paths_subset}
+        )
+        
         print(f"  Subsampled to {n_train} train, {n_valid} val images ({PERCENT_DATASET}%)")
-    else:
-        train_paths_subset = list(ds_train.image_paths) if hasattr(ds_train, 'image_paths') else list(ds_train.images)
-        valid_paths_subset = list(ds_valid.image_paths) if hasattr(ds_valid, 'image_paths') else list(ds_valid.images)
     
     # Create datasets
     train_transform = get_augmentation_transforms(is_train=True)
     val_transform = get_augmentation_transforms(is_train=False)
     
-    train_dataset = FeatureDerainDataset(ds_train, processor, train_transform, is_train=True)
-    val_dataset = FeatureDerainDataset(ds_valid, processor, val_transform, is_train=False)
-    
-    # Limit to subsampled indices
-    if PERCENT_DATASET < 100:
-        train_dataset._paths = train_paths_subset
-        val_dataset._paths = valid_paths_subset
+    train_dataset = AugmentedDetectionDataset(ds_train, processor, train_transform, is_train=True)
+    val_dataset = AugmentedDetectionDataset(ds_valid, processor, val_transform, is_train=False)
     
     # Create dataloaders
     train_loader = DataLoader(
@@ -576,13 +578,6 @@ def main():
                 os.path.join(OUTPUT_DIR, 'derain_phase1_best.pt')
             )
         
-        # Checkpoint
-        if epoch % SAVE_EVERY_N_EPOCHS == 0:
-            torch.save(
-                model.derain_module.state_dict(),
-                os.path.join(OUTPUT_DIR, f'derain_phase1_epoch{epoch}.pt')
-            )
-        
         clear_memory()
     
     phase1_time = time.time() - start_time
@@ -611,6 +606,10 @@ def main():
     )
     
     phase2_start = time.time()
+    
+    # Early stopping tracking
+    early_stop_counter = 0
+    phase2_best_val_loss = float('inf')
     
     for epoch in range(1, PHASE2_EPOCHS + 1):
         epoch_start = time.time()
@@ -654,13 +653,16 @@ def main():
                 'val_loss': val_loss
             }, os.path.join(OUTPUT_DIR, 'feature_derain_best.pt'))
         
-        # Checkpoint
-        if epoch % SAVE_EVERY_N_EPOCHS == 0:
-            torch.save({
-                'derain_module': model.derain_module.state_dict(),
-                'rtdetr': model.rtdetr.state_dict(),
-                'epoch': epoch
-            }, os.path.join(OUTPUT_DIR, f'feature_derain_epoch{epoch}.pt'))
+        # Early stopping check
+        if val_loss < phase2_best_val_loss:
+            phase2_best_val_loss = val_loss
+            early_stop_counter = 0
+        else:
+            early_stop_counter += 1
+            if early_stop_counter >= EARLY_STOPPING_PATIENCE:
+                print(f"  Early stopping triggered! Val loss hasn't improved for {EARLY_STOPPING_PATIENCE} epochs.")
+                print(f"  Best val loss: {phase2_best_val_loss:.4f}")
+                break
         
         clear_memory()
     
