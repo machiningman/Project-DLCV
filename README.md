@@ -132,6 +132,42 @@ python Eval_FeatureDerain_MixedRain.py
 
 ### Inference
 
+#### Command Line Interface
+
+Use the inference script for quick testing on single images:
+
+```bash
+# Basic inference (displays result)
+python inference.py --image path/to/test.jpg
+
+# With custom confidence threshold
+python inference.py --image path/to/test.jpg --threshold 0.3
+
+# Save result without displaying
+python inference.py --image path/to/test.jpg --output results/ --save --no-show
+
+# Compare Feature De-rain vs Vanilla RT-DETR
+python inference.py --image path/to/test.jpg --compare --output comparison/
+
+# Use vanilla RT-DETR only (for comparison)
+python inference.py --image path/to/test.jpg --vanilla
+```
+
+**Inference Script Options:**
+
+| Argument | Description |
+|----------|-------------|
+| `--image, -i` | Path to input image (required) |
+| `--threshold, -t` | Confidence threshold (default: 0.5) |
+| `--output, -o` | Output directory for results |
+| `--save, -s` | Save the output image |
+| `--no-show` | Don't display the result image |
+| `--compare, -c` | Compare with vanilla RT-DETR |
+| `--checkpoint` | Path to model checkpoint |
+| `--vanilla` | Use vanilla RT-DETR instead |
+
+#### Python API
+
 ```python
 from transformers import RTDetrImageProcessor, RTDetrForObjectDetection
 from utils.feature_derain import FeatureDerainRTDETR, create_feature_derain_rtdetr
@@ -165,6 +201,7 @@ results = processor.post_process_object_detection(
 ├── Training_FeatureDerain.py       # Main training script
 ├── Eval_FeatureDerain.py           # Evaluation on COCO-Rain
 ├── Eval_FeatureDerain_MixedRain.py # Evaluation on MixedRain
+├── inference.py                    # Single image inference script
 ├── model_spa.pt                    # SPDNet weights (for comparison)
 ├── requirements.txt                # Python dependencies
 ├── utils/
@@ -245,8 +282,8 @@ If you find this work useful, please cite:
 ```bibtex
 @misc{feature-derain-rtdetr,
   title={Feature-Level De-raining for Robust Object Detection},
-  author={Your Name},
+  author={Andi Alfian Kartika Aji},
   year={2025},
-  url={https://github.com/yourusername/feature-derain-rtdetr}
+  url={https://github.com/machiningman/Project-DLCV}
 }
 ```

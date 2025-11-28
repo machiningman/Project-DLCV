@@ -67,7 +67,7 @@ from utils.feature_derain import FeatureDerainRTDETR, create_feature_derain_rtde
 # Configuration
 # =============================================================================
 
-MIXEDRAIN_DIR = "E:/Python/DLCV/Project DLCV/mixedrain"
+MIXEDRAIN_DIR = "E:/Python/DLCV/mixedrain"
 LABELS_FILE = os.path.join(MIXEDRAIN_DIR, "labels.txt")
 
 # Model paths
