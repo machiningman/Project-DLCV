@@ -66,7 +66,7 @@ MODEL_NAME = "PekingU/rtdetr_r18vd"
 DERAIN_TYPE = "multiscale"  # "lightweight" or "multiscale" - multiscale has ~50K+ params
 
 # Dataset
-PERCENT_DATASET = 25   # Use 25% for faster training (~30K images)
+PERCENT_DATASET = 100   # Use 100% for full training (~120K images)
 COCO_RATIO = 0.3       # 30% clean images (prevent over-processing)
 RAIN_RATIO = 0.7       # 70% rainy images
 

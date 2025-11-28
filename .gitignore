@@ -1,13 +1,6 @@
 # Large prediction files
-vanilla_preds.json
-vanilla_predictions.json
-integrated_predictions.json
-conditional_preds.json
-
-# Training checkpoints (keep only best and final)
-outputs_conditional/checkpoint-*/
-outputs_integrated/checkpoint-*/
-outputs_spdnet_adaptation/checkpoint-*/
+*.json
+!training_log.json
 
 # Python cache
 __pycache__/
@@ -34,3 +27,11 @@ ENV/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Model checkpoints (too large for git)
+*.pt
+outputs_feature_derain/
+
+# Logs
+logs/
+
