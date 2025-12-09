@@ -6,12 +6,17 @@
 
 A novel approach to rain-robust object detection that operates at the **feature level** rather than pixel level, achieving **10x faster inference** while maintaining detection accuracy.
 
+## 📹 Demo
+
+
 ## 📋 Overview
 
 ### Problem
+
 Object detection models (like RT-DETR) suffer significant accuracy drops in rainy conditions. Traditional solutions apply pixel-level de-raining (SPDNet) before detection, but this adds **~180ms latency** per image.
 
 ### Our Solution
+
 **Feature-Level De-raining**: Instead of reconstructing clean images, we suppress rain-related features directly in the detector's backbone output. This achieves:
 
 - ⚡ **10x faster** than pixel-level de-raining (3-5ms vs 180ms)
@@ -54,7 +59,7 @@ Object detection models (like RT-DETR) suffer significant accuracy drops in rain
 ### Key Components
 
 1. **Rain Mask Estimation**: Learns to identify rain-affected spatial regions
-2. **CBAM Attention**: Channel + Spatial attention for selective feature refinement  
+2. **CBAM Attention**: Channel + Spatial attention for selective feature refinement
 3. **Residual Design**: Preserves clean features while suppressing rain artifacts
 4. **Multi-Scale Processing**: Handles rain at different scales (droplets → streaks)
 
@@ -62,11 +67,11 @@ Object detection models (like RT-DETR) suffer significant accuracy drops in rain
 
 ### Real Rain Dataset
 
-| Model | mAP | AP50 | AP75 | Latency | Notes |
-|-------|-----|------|------|---------|-------|
-| Vanilla RT-DETR | 40.50% | 51.90% | 45.84% | 15.3ms | Baseline |
-| SPDNet + RT-DETR | 42.21% | 53.73% | 47.18% | 244.2ms | Pixel-level |
-| **Feature De-rain (Ours)** | **41.27%** | **52.20%** | **44.09%** | **21.0ms** | Balanced |
+| Model                            | mAP              | AP50             | AP75             | Latency          | Notes       |
+| -------------------------------- | ---------------- | ---------------- | ---------------- | ---------------- | ----------- |
+| Vanilla RT-DETR                  | 40.50%           | 51.90%           | 45.84%           | 15.3ms           | Baseline    |
+| SPDNet + RT-DETR                 | 42.21%           | 53.73%           | 47.18%           | 244.2ms          | Pixel-level |
+| **Feature De-rain (Ours)** | **41.27%** | **52.20%** | **44.09%** | **21.0ms** | Balanced    |
 
 ## 🚀 Quick Start
 
@@ -99,6 +104,7 @@ python Training_FeatureDerain.py
 ```
 
 **Training Configuration** (in script):
+
 ```python
 PERCENT_DATASET = 100   # Use 100% for full training
 COCO_RATIO = 0.3        # 30% clean images
@@ -109,6 +115,7 @@ BATCH_SIZE = 16         # Adjust for your GPU
 ```
 
 **Two-Phase Training Strategy:**
+
 1. **Phase 1**: Train de-rain module only (RT-DETR frozen)
 2. **Phase 2**: Joint fine-tuning with differential learning rates
 
@@ -124,7 +131,7 @@ python Eval_FeatureDerain_MixedRain.py
 
 ### Inference
 
-#### Command Line Interface
+#### Single Image Inference
 
 Use the inference script for quick testing on single images:
 
@@ -147,127 +154,39 @@ python inference.py --image path/to/test.jpg --vanilla
 
 **Inference Script Options:**
 
-| Argument | Description |
-|----------|-------------|
-| `--image, -i` | Path to input image (required) |
+| Argument            | Description                         |
+| ------------------- | ----------------------------------- |
+| `--image, -i`     | Path to input image (required)      |
 | `--threshold, -t` | Confidence threshold (default: 0.5) |
-| `--output, -o` | Output directory for results |
-| `--save, -s` | Save the output image |
-| `--no-show` | Don't display the result image |
-| `--compare, -c` | Compare with vanilla RT-DETR |
-| `--checkpoint` | Path to model checkpoint |
-| `--vanilla` | Use vanilla RT-DETR instead |
+| `--output, -o`    | Output directory for results        |
+| `--save, -s`      | Save the output image               |
+| `--no-show`       | Don't display the result image      |
+| `--compare, -c`   | Compare with vanilla RT-DETR        |
+| `--checkpoint`    | Path to model checkpoint            |
+| `--vanilla`       | Use vanilla RT-DETR instead         |
 
-#### Python API
+#### Video Inference
 
-```python
-from transformers import RTDetrImageProcessor, RTDetrForObjectDetection
-from utils.feature_derain import FeatureDerainRTDETR, create_feature_derain_rtdetr
+Process videos with real-time FPS display and object detection:
 
-# Load model
-rtdetr = RTDetrForObjectDetection.from_pretrained("PekingU/rtdetr_r18vd")
-model = FeatureDerainRTDETR(rtdetr, derain_type="multiscale")
+```bash
+# Basic video inference (Feature De-rain model, shows progress)
+python video_inference.py --video path/to/video.mp4
 
-# Load trained weights
-checkpoint = torch.load("outputs_feature_derain/feature_derain_best.pt")
-model.derain_module.load_state_dict(checkpoint['derain_module'])
-model.eval().cuda()
+# Use vanilla RT-DETR model
+python video_inference.py --video path/to/video.mp4 --model vanilla
 
-# Inference
-processor = RTDetrImageProcessor.from_pretrained("PekingU/rtdetr_r18vd")
-image = Image.open("rainy_image.jpg")
-inputs = processor(images=image, return_tensors="pt").to("cuda")
+# Process specific time range (e.g., first 2 minutes)
+python video_inference.py --video path/to/video.mp4 --start 0 --end 120
 
-with torch.no_grad():
-    outputs = model(**inputs)
-    
-results = processor.post_process_object_detection(
-    outputs, target_sizes=[(image.height, image.width)], threshold=0.5
-)
+# Process from minute 5 to minute 7
+python video_inference.py --video path/to/video.mp4 --start 300 --end 420
+
+# Custom output path and threshold
+python video_inference.py --video path/to/video.mp4 --output my_result.mp4 --threshold 0.6
 ```
 
-## 📁 Project Structure
-
-```
-.
-├── Training_FeatureDerain.py       # Main training script
-├── Eval_FeatureDerain.py           # Evaluation on COCO-Rain
-├── Eval_FeatureDerain_MixedRain.py # Evaluation on MixedRain
-├── inference.py                    # Single image inference script
-├── model_spa.pt                    # SPDNet weights (for comparison)
-├── requirements.txt                # Python dependencies
-├── utils/
-│   ├── __init__.py
-│   ├── data_utils.py               # Dataset loading & augmentation
-│   ├── eval_utils.py               # COCO evaluation metrics
-│   ├── feature_derain.py           # Feature de-rain module (core)
-│   └── spdnet_utils.py             # SPDNet utilities (baseline)
-├── outputs_feature_derain/         # Training outputs & checkpoints
-└── docs/
-    ├── FEATURE_DERAIN_ARCHITECTURE.md  # Detailed architecture docs
-    └── Project_goal.md                  # Project motivation
-```
-
-## 🔧 Configuration
-
-### Dataset Paths
-
-Update paths in scripts:
-```python
-COCO_DIR = "path/to/coco"           # Clean COCO dataset
-COCO_RAIN_DIR = "path/to/coco_rain" # Rainy COCO dataset
-```
-
-### SPDNet Setup (for comparison)
-
-SPDNet requires external setup:
-1. Clone SPDNet repository to `E:\Python\DLCV\SPDNet`
-2. Update `SPDNET_SRC_PATH` in `utils/spdnet_utils.py`
-
-## 📈 Training Tips
-
-1. **OOM Issues**: Reduce `BATCH_SIZE` or enable `GRADIENT_ACCUMULATION_STEPS`
-2. **Fast Testing**: Set `PERCENT_DATASET = 5` for quick validation
-3. **Better Results**: Train with `PERCENT_DATASET = 100` for full performance
-4. **Mixed Precision**: `USE_AMP = True` (enabled by default)
-
-## 🔬 Technical Details
-
-### Why Feature-Level Works
-
-1. **Rain in Feature Space**: Rain activates specific CNN channels (edge/gradient detectors, vertical filters). CBAM attention learns to suppress these.
-
-2. **Efficiency**: Feature tensors are 0.17x-0.67x the size of input images, making processing inherently faster.
-
-3. **Task Alignment**: Training with detection loss ensures features are optimized for detection, not visual quality.
-
-### Model Variants
-
-| Variant | Parameters | Speed | Use Case |
-|---------|------------|-------|----------|
-| `lightweight` | ~50K | Fastest | Resource-constrained |
-| `multiscale` | ~12.7M | Balanced | Best accuracy (default) |
-
-## 📚 Documentation
-
-- [Architecture Design](docs/FEATURE_DERAIN_ARCHITECTURE.md) - Detailed technical documentation
-- [Project Goals](docs/Project_goal.md) - Problem statement and motivation
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit issues or pull requests.
-
-## 📄 License
-
-This project is licensed under the MIT License.
-
-## 🙏 Acknowledgments
-
-- [RT-DETR](https://github.com/PaddlePaddle/PaddleDetection) - Real-Time DEtection TRansformer
-- [SPDNet](https://github.com/panhongrui/SPDNet) - Structure-Preserving Deraining Network
-- [HuggingFace Transformers](https://huggingface.co/docs/transformers/) - Model hosting and utilities
-
-## 📖 Citation
+## Citation
 
 If you find this work useful, please cite:
 
